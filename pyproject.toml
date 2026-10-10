@@ -1,0 +1,11 @@
+[project]
+name = "human-to-robot"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "mujoco>=3.3,<3.4",
+    "numpy>=2.5.3",
+    "robosuite>=1.5.1",
+]
