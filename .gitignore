@@ -8,3 +8,10 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Données et résultats d'entraînement
+data/
+outputs/
+
+.DS_Store
+.vscode/
