@@ -3,7 +3,7 @@
 import torch
 from torch import nn
 import torch.nn.functional as F
-from einops import rearrange
+from einops import rearrange, repeat
 
 
 def modulate(x, shift, scale):
@@ -77,27 +77,30 @@ class Attention(nn.Module):
             else nn.Identity()
         )
 
-    def forward(self, x, causal=True):
+    def forward(self, x, causal=True, frame_size=1):
         """
-        x : (B, T, D)
+        x : (B, L, D), L = T * frame_size tokens (frame_size tokens per frame)
         """
         x = self.norm(x)
         drop = self.dropout if self.training else 0.0
-        qkv = self.to_qkv(x).chunk(3, dim=-1)  # q, k, v: (B, heads, T, dim_head)
+        qkv = self.to_qkv(x).chunk(3, dim=-1)  # q, k, v: (B, heads, L, dim_head)
         q, k, v = (rearrange(t, "b t (h d) -> b h t d", h=self.heads) for t in qkv)
-        q, k = self.rope(q), self.rope(k)
-        out = F.scaled_dot_product_attention(q, k, v, dropout_p=drop, is_causal=causal)
+        frame = torch.arange(x.size(1), device=x.device) // frame_size  # frame index per token
+        q, k = self.rope(q, frame), self.rope(k, frame)
+        mask = frame[:, None] >= frame[None, :] if causal else None  # see all tokens of past frames
+        out = F.scaled_dot_product_attention(q, k, v, attn_mask=mask, dropout_p=drop)
         out = rearrange(out, "b h t d -> b t (h d)")
         return self.to_out(out)
 
-    def rope(self, x, base=1000):
+    def rope(self, x, pos, base=1000):
         """
-        x : (B,heads,T,dim_head)
+        x : (B, heads, L, dim_head)
+        pos : (L,) position of each token
         """
-        T, d = x.shape[-2], x.shape[-1]
+        d = x.shape[-1]
         theta = base ** (-torch.arange(0, d, 2, device=x.device) / d)
 
-        ang = torch.arange(T, device=x.device)[:, None] * theta  # (T,d/2)
+        ang = pos[:, None] * theta  # (L, d/2)
         cos, sin = ang.cos(), ang.sin()
         x1, x2 = x[..., 0::2], x[..., 1::2]
         return torch.stack((x1 * cos - x2 * sin, x1 * sin + x2 * cos), -1).flatten(-2)
@@ -120,11 +123,13 @@ class ConditionalBlock(nn.Module):
         nn.init.constant_(self.adaLN_modulation[-1].weight, 0)
         nn.init.constant_(self.adaLN_modulation[-1].bias, 0)
 
-    def forward(self, x, c):
+    def forward(self, x, c, frame_size=1):
         shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = (
             self.adaLN_modulation(c).chunk(6, dim=-1)
         )
-        x = x + gate_msa * self.attn(modulate(self.norm1(x), shift_msa, scale_msa))
+        x = x + gate_msa * self.attn(
+            modulate(self.norm1(x), shift_msa, scale_msa), frame_size=frame_size
+        )
         x = x + gate_mlp * self.mlp(modulate(self.norm2(x), shift_mlp, scale_mlp))
         return x
 
@@ -188,7 +193,7 @@ class Transformer(nn.Module):
                 block_class(hidden_dim, heads, dim_head, mlp_dim, dropout)
             )
 
-    def forward(self, x, c=None):
+    def forward(self, x, c=None, frame_size=1):
 
         if hasattr(self, "input_proj"):
             x = self.input_proj(x)
@@ -197,7 +202,7 @@ class Transformer(nn.Module):
             c = self.cond_proj(c)
 
         for block in self.layers:
-            x = block(x) if isinstance(block, Block) else block(x, c)
+            x = block(x) if isinstance(block, Block) else block(x, c, frame_size)
         x = self.norm(x)
 
         if hasattr(self, "output_proj"):
@@ -260,12 +265,34 @@ class MLP(nn.Module):
         return self.net(x)
 
 
+class PatchProjector(nn.Module):
+    """Compress the encoder patch grid: 16x fewer patches (two stride-2 convs)"""
+
+    def __init__(self, input_dim, hidden_dim, output_dim):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Conv2d(input_dim, hidden_dim, kernel_size=2, stride=2),
+            nn.GELU(),
+            nn.Conv2d(hidden_dim, output_dim, kernel_size=2, stride=2),
+        )
+
+    def forward(self, x):
+        """
+        x: (B*T, N, D) patch tokens of a square grid, without CLS
+        """
+        h = int(x.size(1) ** 0.5)
+        x = rearrange(x, "b (h w) d -> b d h w", h=h)
+        x = self.net(x)
+        return rearrange(x, "b d h w -> b (h w) d")
+
+
 class ARPredictor(nn.Module):
     """Autoregressive predictor for next-step embedding prediction."""
 
     def __init__(
         self,
         *,
+        num_patches,
         depth,
         heads,
         mlp_dim,
@@ -277,7 +304,7 @@ class ARPredictor(nn.Module):
         emb_dropout=0.0,
     ):
         super().__init__()
-
+        self.pos_embedding = nn.Parameter(torch.randn(1, 1, num_patches, input_dim))  # position in the image
         self.dropout = nn.Dropout(emb_dropout)
         self.transformer = Transformer(
             input_dim,
@@ -293,10 +320,14 @@ class ARPredictor(nn.Module):
 
     def forward(self, x, c):
         """
-        x: (B, T, d)
+        x: (B, T, N, d)
         c: (B, T, act_dim)
         """
-
+        n = x.size(2)
+        x = x + self.pos_embedding
+        x = rearrange(x, "b t n d -> b (t n) d")
+        c = repeat(c, "b t d -> b (t n) d", n=n)  # same action for every patch of a frame
         x = self.dropout(x)
-        x = self.transformer(x, c)
+        x = self.transformer(x, c, frame_size=n)
+        x = rearrange(x, "b (t n) d -> b t n d", n=n)
         return x
