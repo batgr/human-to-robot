@@ -3,3 +3,4 @@ robots: Panda
 has_renderer: true
 has_offscreen_renderer: false
 use_camera_obs: false
+camera_names: robot0_eye_in_hand

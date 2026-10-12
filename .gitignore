@@ -10,8 +10,8 @@ wheels/
 .venv
 
 # Données et résultats d'entraînement
-data/
-outputs/
+/data/
+/outputs/
 
 .DS_Store
 .vscode/
