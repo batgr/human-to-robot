@@ -11,6 +11,21 @@ def modulate(x, shift, scale):
     return x * (1 + scale) + shift
 
 
+def rope(x, pos, base=1000):
+    """
+    Rotary position embedding
+    x : (B, heads, L, dim_head)
+    pos : (L,) position of each token
+    """
+    d = x.shape[-1]
+    theta = base ** (-torch.arange(0, d, 2, device=x.device) / d)
+
+    ang = pos[:, None] * theta  # (L, d/2)
+    cos, sin = ang.cos(), ang.sin()
+    x1, x2 = x[..., 0::2], x[..., 1::2]
+    return torch.stack((x1 * cos - x2 * sin, x1 * sin + x2 * cos), -1).flatten(-2)
+
+
 class SIGReg(torch.nn.Module):
     """Sketch Isotropic Gaussian Regularizer (single-GPU!)"""
 
@@ -85,25 +100,49 @@ class Attention(nn.Module):
         drop = self.dropout if self.training else 0.0
         qkv = self.to_qkv(x).chunk(3, dim=-1)  # q, k, v: (B, heads, L, dim_head)
         q, k, v = (rearrange(t, "b t (h d) -> b h t d", h=self.heads) for t in qkv)
-        frame = torch.arange(x.size(1), device=x.device) // frame_size  # frame index per token
-        q, k = self.rope(q, frame), self.rope(k, frame)
-        mask = frame[:, None] >= frame[None, :] if causal else None  # see all tokens of past frames
+        frame = (
+            torch.arange(x.size(1), device=x.device) // frame_size
+        )  # frame index per token
+        q, k = rope(q, frame), rope(k, frame)
+        mask = (
+            frame[:, None] >= frame[None, :] if causal else None
+        )  # see all tokens of past frames
         out = F.scaled_dot_product_attention(q, k, v, attn_mask=mask, dropout_p=drop)
         out = rearrange(out, "b h t d -> b t (h d)")
         return self.to_out(out)
 
-    def rope(self, x, pos, base=1000):
-        """
-        x : (B, heads, L, dim_head)
-        pos : (L,) position of each token
-        """
-        d = x.shape[-1]
-        theta = base ** (-torch.arange(0, d, 2, device=x.device) / d)
 
-        ang = pos[:, None] * theta  # (L, d/2)
-        cos, sin = ang.cos(), ang.sin()
-        x1, x2 = x[..., 0::2], x[..., 1::2]
-        return torch.stack((x1 * cos - x2 * sin, x1 * sin + x2 * cos), -1).flatten(-2)
+class CrossAttention(nn.Module):
+    """Scaled dot-product attention of queries over a context"""
+
+    def __init__(self, dim, heads=8, dim_head=64, dropout=0.0):
+        super().__init__()
+        inner_dim = dim_head * heads
+        self.heads = heads
+        self.dropout = dropout
+        self.norm_q = nn.LayerNorm(dim)
+        self.norm_kv = nn.LayerNorm(dim)
+        self.to_q = nn.Linear(dim, inner_dim, bias=False)
+        self.to_kv = nn.Linear(dim, inner_dim * 2, bias=False)
+        self.to_out = nn.Sequential(nn.Linear(inner_dim, dim), nn.Dropout(dropout))
+
+    def forward(self, x, context, frame_size=1):
+        """
+        x : (B, Lq, D) queries, placed right after the last context frame
+        context : (B, L, D), frame_size tokens per frame
+        """
+        drop = self.dropout if self.training else 0.0
+        q = self.to_q(self.norm_q(x))
+        k, v = self.to_kv(self.norm_kv(context)).chunk(2, dim=-1)
+        q, k, v = (rearrange(t, "b t (h d) -> b h t d", h=self.heads) for t in (q, k, v))
+        frame = (
+            torch.arange(context.size(1), device=x.device) // frame_size
+        )  # frame index per context token
+        q_frame = (frame[-1] + 1).expand(x.size(1))  # queries come after the context
+        q, k = rope(q, q_frame), rope(k, frame)
+        out = F.scaled_dot_product_attention(q, k, v, dropout_p=drop)
+        out = rearrange(out, "b h t d -> b t (h d)")
+        return self.to_out(out)
 
 
 class ConditionalBlock(nn.Module):
@@ -145,9 +184,24 @@ class Block(nn.Module):
         self.norm1 = nn.LayerNorm(dim, elementwise_affine=False, eps=1e-6)
         self.norm2 = nn.LayerNorm(dim, elementwise_affine=False, eps=1e-6)
 
-    def forward(self, x):
-        x = x + self.attn(self.norm1(x))
+    def forward(self, x, causal=True, frame_size=1):
+        x = x + self.attn(self.norm1(x), causal=causal, frame_size=frame_size)
         x = x + self.mlp(self.norm2(x))
+        return x
+
+
+class CrossBlock(nn.Module):
+    """Transformer block where queries read a context through cross-attention"""
+
+    def __init__(self, dim, heads, dim_head, mlp_dim, dropout=0.0):
+        super().__init__()
+
+        self.attn = CrossAttention(dim, heads=heads, dim_head=dim_head, dropout=dropout)
+        self.mlp = FeedForward(dim, mlp_dim, dropout=dropout)
+
+    def forward(self, x, context, frame_size=1):
+        x = x + self.attn(x, context, frame_size=frame_size)
+        x = x + self.mlp(x)
         return x
 
 
@@ -193,7 +247,7 @@ class Transformer(nn.Module):
                 block_class(hidden_dim, heads, dim_head, mlp_dim, dropout)
             )
 
-    def forward(self, x, c=None, frame_size=1):
+    def forward(self, x, c=None, causal=True, frame_size=1):
 
         if hasattr(self, "input_proj"):
             x = self.input_proj(x)
@@ -202,7 +256,11 @@ class Transformer(nn.Module):
             c = self.cond_proj(c)
 
         for block in self.layers:
-            x = block(x) if isinstance(block, Block) else block(x, c, frame_size)
+            x = (
+                block(x, causal, frame_size)
+                if isinstance(block, Block)
+                else block(x, c, frame_size)
+            )
         x = self.norm(x)
 
         if hasattr(self, "output_proj"):
@@ -304,7 +362,9 @@ class ARPredictor(nn.Module):
         emb_dropout=0.0,
     ):
         super().__init__()
-        self.pos_embedding = nn.Parameter(torch.randn(1, 1, num_patches, input_dim))  # position in the image
+        self.pos_embedding = nn.Parameter(
+            torch.randn(1, 1, num_patches, input_dim)
+        )  # position in the image
         self.dropout = nn.Dropout(emb_dropout)
         self.transformer = Transformer(
             input_dim,
@@ -326,8 +386,11 @@ class ARPredictor(nn.Module):
         n = x.size(2)
         x = x + self.pos_embedding
         x = rearrange(x, "b t n d -> b (t n) d")
-        c = repeat(c, "b t d -> b (t n) d", n=n)  # same action for every patch of a frame
+        c = repeat(
+            c, "b t d -> b (t n) d", n=n
+        )  # same action for every patch of a frame
         x = self.dropout(x)
         x = self.transformer(x, c, frame_size=n)
         x = rearrange(x, "b (t n) d -> b t n d", n=n)
         return x
+

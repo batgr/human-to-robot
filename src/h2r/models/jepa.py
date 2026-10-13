@@ -18,7 +18,7 @@ class JEPA(nn.Module):
         self,
         encoder,
         predictor,
-        action_encoder,
+        idm,
         projector=None,
         pred_proj=None,
     ):
@@ -26,13 +26,13 @@ class JEPA(nn.Module):
 
         self.encoder = encoder
         self.predictor = predictor
-        self.action_encoder = action_encoder
+        self.idm = idm  # latent actions, fed directly to the predictor
         self.projector = projector or nn.Identity()
         self.pred_proj = pred_proj or nn.Identity()
 
     def encode(self, info):
-        """Encode observations and actions into embeddings.
-        info: dict with pixels and action keys
+        """Encode observations into embeddings.
+        info: dict with pixels key
         """
 
         pixels = info["pixels"].float()
@@ -42,19 +42,15 @@ class JEPA(nn.Module):
         pixels_emb = output.last_hidden_state[:, 1:]  # patch tokens (drop cls)
         emb = self.projector(pixels_emb)  # (B*T, N, D)
         info["emb"] = rearrange(emb, "(b t) n d -> b t n d", b=b)
-
-        if "action" in info:
-            info["act_emb"] = self.action_encoder(info["action"])
-
         return info
 
-    def predict(self, emb, act_emb):
+    def predict(self, emb, z):
         """Predict next state embedding
         emb: (B, T, N, D)
-        act_emb: (B, T, A_emb)
+        z: (B, T, D) latent actions
         """
         b, t = emb.shape[:2]
-        preds = self.predictor(emb, act_emb)
+        preds = self.predictor(emb, z)
         preds = self.pred_proj(rearrange(preds, "b t n d -> (b t n) d"))
         preds = rearrange(preds, "(b t n) d -> b t n d", b=b, t=t)
         return preds
@@ -66,7 +62,7 @@ class JEPA(nn.Module):
     def rollout(self, info, action_sequence, history_size: int = 3):
         """Rollout the model given an initial info dict and action sequence.
         pixels: (B, S, T, C, H, W)
-        action_sequence: (B, S, T, action_dim)
+        action_sequence: (B, S, T, D) latent actions
          - S is the number of action plan samples
          - T is the time horizon
         """
@@ -92,9 +88,8 @@ class JEPA(nn.Module):
         # rollout predictor autoregressively for n_steps
         HS = history_size
         for t in range(n_steps):
-            act_emb = self.action_encoder(act)
             emb_trunc = emb[:, -HS:]  # (BS, HS, N, D)
-            act_trunc = act_emb[:, -HS:]  # (BS, HS, A_emb)
+            act_trunc = act[:, -HS:]  # (BS, HS, D)
             pred_emb = self.predict(emb_trunc, act_trunc)[:, -1:]  # (BS, 1, N, D)
             emb = torch.cat([emb, pred_emb], dim=1)  # (BS, T+1, N, D)
 
@@ -102,9 +97,8 @@ class JEPA(nn.Module):
             act = torch.cat([act, next_act], dim=1)  # (BS, T+1, action_dim)
 
         # predict the last state
-        act_emb = self.action_encoder(act)  # (BS, T, A_emb)
         emb_trunc = emb[:, -HS:]  # (BS, HS, N, D)
-        act_trunc = act_emb[:, -HS:]  # (BS, HS, A_emb)
+        act_trunc = act[:, -HS:]  # (BS, HS, D)
         pred_emb = self.predict(emb_trunc, act_trunc)[:, -1:]  # (BS, 1, N, D)
         emb = torch.cat([emb, pred_emb], dim=1)
 
