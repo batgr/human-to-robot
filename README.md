@@ -43,6 +43,7 @@ uv run h2r data push --config configs/data/sim.yaml
 uv run wandb login
 uv run h2r train
 uv run h2r train --resume outputs/<name>/<run>
+uv run h2r train --config configs/train/robots-1h30.yaml
 ```
 
 ## Credits
