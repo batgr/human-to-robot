@@ -4,8 +4,8 @@ model: configs/model/config.yaml
 output_dir: outputs
 
 data:
-  root: data/processed/
-  hf_repo: batgre/h2r
+  root: data/h2r-ssv2
+  hf_repo: batgre/h2r-ssv2
   clip_len: 5
   num_workers: 8
 
