@@ -1,0 +1,16 @@
+
+raw_dir: data/raw/
+processed_dir: data/processed/
+
+fps: 4
+image_size: 224
+min_frames: 5
+
+split:
+  val: 0.1
+  test: 0.1
+  seed: 0
+
+shard_size: 1000
+hf_repo: batgre/h2r
+private: false
