@@ -22,6 +22,14 @@ uv sync
    uv run h2r data push
    ```
 
+## Training
+
+```bash
+uv run wandb login
+uv run h2r train
+uv run h2r train --resume outputs/<name>/<run>
+```
+
 ## Credits
 
 `src/h2r/models/jepa.py` and `src/h2r/models/module.py` are adapted from

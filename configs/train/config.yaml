@@ -1,0 +1,32 @@
+name: h2r
+seed: 0
+model: configs/model/config.yaml
+output_dir: outputs
+
+data:
+  root: data/processed/
+  hf_repo: batgre/h2r
+  clip_len: 5
+  num_workers: 8
+
+context: 3
+rollout_steps: 2
+
+loss:
+  beta: 0.001
+  sigreg: 0.09
+
+optim:
+  muon_lr: 0.02
+  adamw_lr: 0.000625
+  weight_decay: 0.04
+  warmup: 0.1
+  grad_clip: 1.0
+
+batch_size: 128
+epochs: 50
+precision: bf16
+
+wandb:
+  enabled: true
+  project: h2r
