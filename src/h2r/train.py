@@ -105,9 +105,10 @@ def evaluate(model, sigreg, loader, cfg, device, autocast):
             target = emb[:, 1 : C + 1].float()
             z_zero = model.predict(emb[:, :C], torch.zeros_like(z[:, :C]))
             z_shuf = model.predict(emb[:, :C], z[torch.randperm(len(z)), :C])
+        last, future = emb[:, C - 1 : C].float(), emb[:, C + 1 :].float()
         stats = {k: v.item() for k, v in out.items()} | {
             "persistence": F.mse_loss(emb[:, :C].float(), target).item(),  # nothing moves, 1 step
-            "persistence_2": F.mse_loss(emb[:, C - 1].float(), emb[:, C + 1].float()).item(),  # 2 steps
+            "persistence_ro": F.mse_loss(last.expand_as(future), future).item(),  # same frames as ro
             "z_zero": F.mse_loss(z_zero.float(), target).item(),
             "z_shuffled": F.mse_loss(z_shuf.float(), target).item(),
             "emb_std": emb.float().std(0).mean().item(),
@@ -236,7 +237,7 @@ def train(cfg):
         if wandb:
             wandb.log({f"val/{k}": v for k, v in val.items()}, step=step)
         log(f"epoch {epoch}/{cfg['epochs']} step {step} | tf {val['tf']:.4f} (persistence {val['persistence']:.4f}, "
-            f"z=0 {val['z_zero']:.4f}) | ro {val['ro']:.4f} (persistence {val['persistence_2']:.4f}) | "
+            f"z=0 {val['z_zero']:.4f}) | ro {val['ro']:.4f} (persistence {val['persistence_ro']:.4f}) | "
             f"kl {val['kl']:.2f} | emb std {val['emb_std']:.3f} rank {val['emb_rank']:.1f}")
         if val["ro"] < best:
             best = val["ro"]

@@ -1,0 +1,36 @@
+raw_dir: data/raw-robots/
+processed_dir: data/h2r-robots/
+
+sources:
+  - repo: lerobot/droid_1.0.1
+    camera: observation.images.exterior_1_left
+    minutes: 50
+    max_files: 16
+  - repo: lerobot/berkeley_autolab_ur5
+    camera: observation.images.image
+    minutes: 50
+  - repo: lerobot/jaco_play
+    camera: observation.images.image
+    minutes: 50
+  - repo: lerobot/taco_play
+    camera: observation.images.rgb_static
+    minutes: 50
+  - repo: lerobot/stanford_kuka_multimodal_dataset
+    camera: observation.images.image
+    minutes: 50
+  - repo: lerobot/roboturk
+    camera: observation.images.front_rgb
+    minutes: 50
+
+fps: 4
+image_size: 224
+min_frames: 8
+
+split:
+  val: 0.1
+  test: 0.1
+  seed: 0
+
+shard_size: 1000
+hf_repo: batgre/h2r-robots
+private: false

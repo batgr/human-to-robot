@@ -22,6 +22,14 @@ uv sync
    uv run h2r data push
    ```
 
+Robot data (LeRobot datasets):
+
+```bash
+uv run h2r data download --config configs/data/robots.yaml
+uv run h2r data extract --config configs/data/robots.yaml
+uv run h2r data push --config configs/data/robots.yaml
+```
+
 ## Training
 
 ```bash

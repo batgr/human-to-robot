@@ -4,13 +4,13 @@ model: configs/model/config.yaml
 output_dir: outputs
 
 data:
-  root: data/h2r-ssv2
-  hf_repo: batgre/h2r-ssv2
-  clip_len: 5
+  root: data/h2r-robots
+  hf_repo: batgre/h2r-robots
+  clip_len: 8
   num_workers: 8
 
 context: 3
-rollout_steps: 2
+rollout_steps: 5
 
 loss:
   beta: 0.001
