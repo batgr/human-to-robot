@@ -59,7 +59,7 @@ def download(cfg):
         (raw / name).mkdir(parents=True, exist_ok=True)
         done = 0
         for path, eps in sorted(by_file.items()):
-            with tempfile.TemporaryDirectory(dir=raw.parent) as tmp:  # the packed file is deleted after cutting
+            with tempfile.TemporaryDirectory() as tmp:  # the packed file is deleted after cutting
                 video = hf_hub_download(src["repo"], path, repo_type="dataset", local_dir=tmp)
                 with ThreadPoolExecutor(8) as pool:
                     ok = pool.map(lambda e: cut(video, e[2], e[3], raw / name / f"episode_{e[0]:06d}.mp4"), eps)
