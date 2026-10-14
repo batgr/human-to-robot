@@ -4,7 +4,7 @@ import argparse
 
 import yaml
 
-from h2r.data import prepare, robots
+from h2r.data import prepare, robots, sim
 
 
 def train(cfg):
@@ -19,6 +19,11 @@ COMMANDS = {
             robots.download,
             "LeRobot datasets -> one raw video per episode",
             "configs/data/robots.yaml",
+        ),
+        "collect": (
+            sim.collect,
+            "robosuite episodes with actions -> frame shards",
+            "configs/data/sim.yaml",
         ),
         "extract": (
             prepare.extract,

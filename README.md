@@ -30,6 +30,13 @@ uv run h2r data extract --config configs/data/robots.yaml
 uv run h2r data push --config configs/data/robots.yaml
 ```
 
+Simulation data with actions (robosuite):
+
+```bash
+uv run h2r data collect --config configs/data/sim.yaml
+uv run h2r data push --config configs/data/sim.yaml
+```
+
 ## Training
 
 ```bash
