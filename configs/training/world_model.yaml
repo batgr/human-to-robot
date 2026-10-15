@@ -1,6 +1,6 @@
 name: h2r
 seed: 0
-model: configs/model/config.yaml
+model: configs/models/world_model.yaml
 output_dir: outputs
 
 data:

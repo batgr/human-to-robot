@@ -65,5 +65,5 @@ def test_drives_the_predictor(ctrl):
 
 
 def test_default_config():
-    cfg = yaml.safe_load(open("configs/controller/config.yaml"))
+    cfg = yaml.safe_load(open("configs/models/controller.yaml"))
     assert Controller(num_patches=N, dim=D, **cfg)(torch.randn(2, cfg["act_dim"]), torch.randn(2, N, D)).shape == (2, D)

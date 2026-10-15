@@ -8,7 +8,7 @@ from h2r.data import prepare
 
 
 def train(cfg):
-    from h2r.train import train as run  # torch and transformers load only when training
+    from h2r.training.world_model import train as run  # torch and transformers load only when training
 
     run(cfg)
 
@@ -40,7 +40,7 @@ def main():
             cmd.set_defaults(fn=fn)
 
     cmd = groups.add_parser("train", help="train the world model and the IDM")
-    cmd.add_argument("--config", default="configs/train/config.yaml")
+    cmd.add_argument("--config", default="configs/training/world_model.yaml")
     cmd.add_argument("--resume", help="run directory to continue")
     cmd.set_defaults(fn=train)
 
