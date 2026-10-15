@@ -26,7 +26,7 @@ uv sync
 
 ```bash
 uv run wandb login
-uv run h2r train
+uv run h2r train --config configs/training/world_model.yaml
 uv run h2r train --resume outputs/<name>/<run>
 ```
 

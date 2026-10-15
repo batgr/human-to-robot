@@ -50,7 +50,7 @@ def main():
     cmd.add_argument("--resume", help="run directory to continue")
     cmd.set_defaults(fn=train)
 
-    sub = groups.add_parser("controller").add_subparsers(dest="command", required=True)
+    sub = groups.add_parser("controller", help="controller for a trained world model").add_subparsers(dest="command", required=True)
     cmd = sub.add_parser("train", help="train a controller for a trained world model")
     cmd.add_argument("--config", default="configs/training/controller.yaml")
     cmd.add_argument("--resume", help="run directory to continue")
