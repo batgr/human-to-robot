@@ -1,0 +1,7 @@
+# Default controller: real action + current frame -> latent action of the world model.
+# num_patches, dim and latent_dim come from the world model's run config, so they always match.
+# Override per dataset (e.g. act_dim for RECON).
+
+act_dim: 7    # DROID: Δxyz, Δroll/pitch/yaw, gripper
+depth: 2      # self-attention blocks on the current frame
+heads: 4
