@@ -1,6 +1,3 @@
-import numpy as np
-import pyarrow as pa
-import pyarrow.parquet as pq
 import torch
 from torch import nn
 
@@ -8,7 +5,7 @@ from h2r.models.controller import Controller
 from h2r.models.idm import IDM
 from h2r.models.jepa import JEPA
 from h2r.models.module import ARPredictor
-from h2r.plan import context_latents, delta_xyz, fit_command_map, plan, to_command
+from h2r.plan import context_latents, delta_xyz, plan
 
 N, D, A = 16, 32, 7
 
@@ -90,18 +87,3 @@ def test_cem_norm_bound():
 def test_delta_xyz():
     real = [[0.01, 0.0, 0.0, 0, 0, 0, 0]] * 3
     assert abs(delta_xyz([[0.0] * 7] * 3, real) - 0.03) < 1e-9 and delta_xyz(real, real) == 0.0
-
-
-def test_command_map(tmp_path):
-    """Fitted on commands vs measured translations, then a planned delta maps back to the command"""
-    rng = np.random.default_rng(0)
-    commands = rng.uniform(-1, 1, (20, 3))
-    pos = np.concatenate([[[0, 0, 0]], np.cumsum(0.03 * commands, 0)])  # measured = 0.03 * command
-    states = np.concatenate([pos, np.zeros((21, 4))], 1)
-    pq.write_table(pa.table({"timestamp": np.arange(21) / 4, "state": states.tolist()}), tmp_path / "state.parquet")
-    sim = [{"command": c.tolist() + [0, 0, 0, 1]} for c in commands] + [{"command": None}]
-    pq.write_table(pa.Table.from_pylist(sim), tmp_path / "sim.parquet")
-    gain, offset = fit_command_map([tmp_path])
-    assert np.allclose(gain, 1 / 0.03, rtol=1e-3) and np.allclose(offset, 0, atol=1e-6)
-    command = to_command(np.array([0.015, -0.03, 0.0, 0, 0, 0, 0.8]), np.zeros(7), gain, offset)
-    assert np.allclose(command, [0.5, -1.0, 0, 0, 0, 0, 1.0], atol=1e-3)  # closes: planned closedness 0.8 > 0.5

@@ -19,6 +19,12 @@ def train_controller(cfg):
     run(cfg)
 
 
+def evaluate_policies(cfg):
+    from h2r.policy import evaluate
+
+    evaluate(cfg)
+
+
 def plan(name, cfg):
     from h2r import plan as planning
 
@@ -69,11 +75,14 @@ def main():
 
     sub = groups.add_parser("plan", help="planning evaluations with a trained controller").add_subparsers(
         dest="command", required=True)
-    for name, help, config in (("offline", "Δxyz on clips of test episodes", "configs/planning/offline.yaml"),
-                               ("robosuite", "closed loop in robosuite", "configs/planning/robosuite.yaml")):
-        cmd = sub.add_parser(name, help=help)
-        cmd.add_argument("--config", default=config)
-        cmd.set_defaults(fn=lambda cfg, name=name: plan(name, cfg))
+    cmd = sub.add_parser("offline", help="Δxyz on clips of test episodes")
+    cmd.add_argument("--config", default="configs/planning/offline.yaml")
+    cmd.set_defaults(fn=lambda cfg: plan("offline", cfg))
+
+    sub = groups.add_parser("policy", help="policies in robosuite").add_subparsers(dest="command", required=True)
+    cmd = sub.add_parser("eval", help="closed loop on collected test episodes")
+    cmd.add_argument("--config", default="configs/policy/robosuite.yaml")
+    cmd.set_defaults(fn=evaluate_policies)
 
     args = parser.parse_args()
     cfg = yaml.safe_load(open(args.config)) | {"config_path": args.config}

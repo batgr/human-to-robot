@@ -1,0 +1,29 @@
+# Policies in closed loop in robosuite, on test episodes of h2r data collect (h2r policy eval).
+name: policy-robosuite
+seed: 0
+policies: [random, planner]            # names in h2r.policy.POLICIES, all run on the same episodes
+sim_config: configs/data/sim.yaml      # raw_dir, env, frameskip and split of the collected episodes
+output_dir: outputs
+
+task: Lift
+episodes_from: scripted                # collected policy whose episodes give the start states and goals
+split: test
+camera: agentview
+episodes: 20
+start: 2                               # t0: frame the simulator is reset to (earlier frames: planner context)
+goal_offset: 10                        # goal = frame t0 + G of the same episode (2.5 s at 4 Hz)
+steps: 15                              # commands per episode
+
+# planner policy
+controller: outputs/controller/<run>   # trained controller run; its world_model entry gives the world model
+planner:
+  context: 3                           # real frames given to the predictor
+  past_latents: controller             # measured actions translated by the controller, or idm
+  window: 3                            # frames the predictor sees while unrolling
+  horizon: 3                           # H
+  samples: 300                         # N
+  elites: 10                           # K
+  iterations: 15                       # J
+  searched: [0, 1, 2, 6]               # Δxyz and gripper; rotations stay at 0
+  max_norm: null                       # optional bound on the translation norm (physical units)
+  pick: best                           # best sequence (Garrido et al.) or mean (Terver et al.)

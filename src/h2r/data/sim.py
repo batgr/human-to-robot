@@ -20,7 +20,6 @@ from pathlib import Path
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
-from scipy.spatial.transform import Rotation
 
 
 def scripted(rng, obs, task, frameskip):
@@ -61,20 +60,6 @@ def random(rng, obs, task, frameskip):
 POLICIES = {"scripted": scripted, "random": random}
 
 
-def robot_state(env, obs):
-    """[x, y, z, roll, pitch, yaw, gripper] in the robot base frame, as DROID's cartesian and gripper positions"""
-    robot = env.robots[0]
-    base = env.sim.model.body_name2id(robot.robot_model.root_body)
-    base_pos, base_rot = env.sim.data.body_xpos[base], Rotation.from_matrix(env.sim.data.body_xmat[base].reshape(3, 3))
-    pos = base_rot.inv().apply(obs["robot0_eef_pos"] - base_pos)
-    rot = (base_rot.inv() * Rotation.from_quat(obs["robot0_eef_quat"])).as_euler("xyz")  # robosuite quat: x, y, z, w
-    joints = list(robot.gripper.values())[0].joints
-    ranges = [env.sim.model.jnt_range[env.sim.model.joint_name2id(j)] for j in joints]
-    q = obs["robot0_gripper_qpos"]
-    closed = 1 - (q[0] - q[1]) / (ranges[0][1] - ranges[1][0])  # 0: fingers fully apart, 1: touching
-    return np.r_[pos, rot, np.clip(closed, 0, 1)]
-
-
 def write_video(frames, path, fps, crf):
     """RGB frames -> H.264 mp4, one video frame per given frame"""
     h, w = frames[0].shape[:2]
@@ -83,18 +68,19 @@ def write_video(frames, path, fps, crf):
     subprocess.run(cmd, input=np.stack(frames).tobytes(), check=True)
 
 
-ENVS = {}  # one environment per task in each worker process
+ENVS = {}  # one environment per task and cameras in each worker process
 
 
 def episode(args):
     """Plays one episode and writes its folder: steps + 1 frames per camera, steps actions"""
     cfg, name, policy, seed = args
-    import robosuite as suite  # in the worker: each process has its own renderer
+    from h2r.envs.robosuite_env import RobosuiteEnv  # in the worker: each process has its own renderer
 
     task = cfg["tasks"][name]
-    if name not in ENVS:
-        ENVS[name] = suite.make(name, camera_names=cfg["cameras"], **cfg["env"])
-    env = ENVS[name]
+    key = (name, *cfg["cameras"], cfg["env"]["camera_heights"], cfg["env"]["camera_widths"])
+    if key not in ENVS:
+        ENVS[key] = RobosuiteEnv({"env_name": name, "camera_names": cfg["cameras"], **cfg["env"]})
+    env = ENVS[key]
     np.random.seed(seed)  # robosuite places the objects with the global generator
     rng = np.random.default_rng(seed)
     obs = env.reset()
@@ -104,14 +90,13 @@ def episode(args):
     rows, sim = [], []
     for t in range(cfg["steps"] + 1):
         for cam in cfg["cameras"]:
-            frames[cam].append(obs[f"{cam}_image"][::-1])  # robosuite renders upside down
-        rows.append(robot_state(env, obs))
-        sim.append({"command": None, "sim_state": env.sim.get_state().flatten().tolist(),
+            frames[cam].append(env.image(obs, cam))
+        rows.append(env.robot_state(obs))
+        sim.append({"command": None, "sim_state": env.sim_state().tolist(),
                     "object": obs[task["object"]].tolist(), "eef_world": obs["robot0_eef_pos"].tolist()})
         if t == cfg["steps"]:
             break
-        for _ in range(cfg["frameskip"]):
-            obs, *_ = env.step(a)
+        obs = env.step(a, cfg["frameskip"])[0]
         sim[-1]["command"] = a.tolist()
         a = act.send(obs)
 
