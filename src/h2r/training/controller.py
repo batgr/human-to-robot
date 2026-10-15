@@ -51,11 +51,12 @@ def world_model_info(run_dir):
 
 
 def read_episodes(root, split):
+    """Videos of a split that have actions (videos without, e.g. human ones, are for the world model only)"""
     tables = [
         pq.read_table(p, columns=["video", "frames", "actions"])
         for p in sorted(Path(root, "frames").glob(f"{split}-*.parquet"))
     ]
-    return [row for t in tables for row in t.to_pylist()]
+    return [row for t in tables for row in t.to_pylist() if row["actions"] is not None]
 
 
 @torch.no_grad()

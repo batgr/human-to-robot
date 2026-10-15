@@ -13,6 +13,7 @@ dependencies = [
     "pyarrow>=26.0.0",
     "pyyaml>=6.0.3",
     "robosuite>=1.5.1",
+    "scipy>=1.18.1",
     "torch>=2.14.1",
     "transformers>=5.19.0",
     "wandb>=0.30.0",

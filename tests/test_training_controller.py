@@ -70,3 +70,15 @@ def test_learns_a_latent_action():
         loss.backward()
         opt.step()
     assert evaluate(ctrl, val, "cpu", autocast) < 0.2 * start
+
+
+def test_videos_without_actions_are_skipped(tmp_path):
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    from h2r.training.controller import read_episodes
+
+    (tmp_path / "frames").mkdir()
+    rows = [episode(3, 2), {"video": "human", "frames": [jpeg(0)] * 3, "actions": None}]
+    pq.write_table(pa.Table.from_pylist(rows), tmp_path / "frames" / "train-00000.parquet")
+    assert [r["video"] for r in read_episodes(tmp_path, "train")] == ["ep"]
