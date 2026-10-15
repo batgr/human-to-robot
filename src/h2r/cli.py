@@ -19,6 +19,12 @@ def train_controller(cfg):
     run(cfg)
 
 
+def plan(name, cfg):
+    from h2r import plan as planning
+
+    getattr(planning, name)(cfg)
+
+
 COMMANDS = {
     "data": {
         "collect": (
@@ -60,6 +66,14 @@ def main():
     cmd.add_argument("--config", default="configs/training/controller.yaml")
     cmd.add_argument("--resume", help="run directory to continue")
     cmd.set_defaults(fn=train_controller)
+
+    sub = groups.add_parser("plan", help="planning evaluations with a trained controller").add_subparsers(
+        dest="command", required=True)
+    for name, help, config in (("offline", "Δxyz on clips of test episodes", "configs/planning/offline.yaml"),
+                               ("robosuite", "closed loop in robosuite", "configs/planning/robosuite.yaml")):
+        cmd = sub.add_parser(name, help=help)
+        cmd.add_argument("--config", default=config)
+        cmd.set_defaults(fn=lambda cfg, name=name: plan(name, cfg))
 
     args = parser.parse_args()
     cfg = yaml.safe_load(open(args.config)) | {"config_path": args.config}

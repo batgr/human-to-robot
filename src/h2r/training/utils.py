@@ -42,7 +42,7 @@ def prepare_run(cfg):
     if resume:
         run_dir = Path(resume)
         return yaml.safe_load(open(run_dir / "config.yaml")), run_dir, True
-    if isinstance(cfg["model"], str):
+    if isinstance(cfg.get("model"), str):
         cfg["model"] = yaml.safe_load(
             open(cfg["model"])
         )  # the run keeps the full config
@@ -74,7 +74,7 @@ def setup(cfg):
         else "mps" if torch.backends.mps.is_available() else "cpu"
     )
     autocast = torch.autocast(
-        device, dtype=torch.bfloat16, enabled=cfg["precision"] == "bf16"
+        device, dtype=torch.bfloat16, enabled=cfg.get("precision") == "bf16"
     )
     return device, autocast
 

@@ -44,6 +44,15 @@ uv run h2r controller train --config configs/training/controller.yaml   # set wo
 uv run h2r controller train --resume outputs/controller/<run>
 ```
 
+## Planning
+
+Evaluations of a trained controller (set `controller` to its run directory):
+
+```bash
+uv run h2r plan offline --config configs/planning/offline.yaml       # Δxyz on clips of test episodes
+uv run h2r plan robosuite --config configs/planning/robosuite.yaml   # closed loop on collected test episodes
+```
+
 ## Tests
 
 ```bash
