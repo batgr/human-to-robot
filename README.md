@@ -30,6 +30,19 @@ uv run h2r train
 uv run h2r train --resume outputs/<name>/<run>
 ```
 
+Controller (real action + current frame -> latent action) for a trained world model, on episodes with actions:
+
+```bash
+uv run h2r controller train --config configs/training/controller.yaml   # set world_model to the run directory
+uv run h2r controller train --resume outputs/controller/<run>
+```
+
+## Tests
+
+```bash
+uv run pytest
+```
+
 ## Credits
 
 `src/h2r/models/jepa.py` and `src/h2r/models/module.py` are adapted from

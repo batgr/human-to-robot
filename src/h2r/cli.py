@@ -1,4 +1,4 @@
-"""Command line: h2r <group> <command> [--config path], h2r train [--config path] [--resume run_dir]"""
+"""Command line: h2r <group> <command> [--config path], h2r train | h2r controller train [--config path] [--resume run_dir]"""
 
 import argparse
 
@@ -9,6 +9,12 @@ from h2r.data import prepare
 
 def train(cfg):
     from h2r.training.world_model import train as run  # torch and transformers load only when training
+
+    run(cfg)
+
+
+def train_controller(cfg):
+    from h2r.training.controller import train_controller as run
 
     run(cfg)
 
@@ -43,6 +49,12 @@ def main():
     cmd.add_argument("--config", default="configs/training/world_model.yaml")
     cmd.add_argument("--resume", help="run directory to continue")
     cmd.set_defaults(fn=train)
+
+    sub = groups.add_parser("controller").add_subparsers(dest="command", required=True)
+    cmd = sub.add_parser("train", help="train a controller for a trained world model")
+    cmd.add_argument("--config", default="configs/training/controller.yaml")
+    cmd.add_argument("--resume", help="run directory to continue")
+    cmd.set_defaults(fn=train_controller)
 
     args = parser.parse_args()
     cfg = yaml.safe_load(open(args.config)) | {"config_path": args.config}

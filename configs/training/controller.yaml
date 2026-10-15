@@ -1,0 +1,24 @@
+name: controller
+seed: 0
+model: configs/models/controller.yaml
+world_model: outputs/h2r/<run>   # trained world model run (config.yaml + best.pt); the controller belongs to it
+output_dir: outputs
+
+data:
+  root: data/h2r-droid           # episode shards with actions
+  hf_repo: batgre/h2r-droid
+  cache: data/cache              # states and IDM targets, encoded once per world model and split
+
+# Garrido et al. 2026, appendix A
+optim:
+  lr: 0.001
+  weight_decay: 0.04
+  warmup: 300                    # iterations
+iterations: 3000
+batch_size: 256
+eval_every: 250
+precision: bf16
+
+wandb:
+  enabled: true
+  project: h2r
