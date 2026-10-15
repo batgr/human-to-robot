@@ -25,10 +25,10 @@ def evaluate_policies(cfg):
     evaluate(cfg)
 
 
-def plan(name, cfg):
-    from h2r import plan as planning
+def plan_offline(cfg):
+    from h2r.plan import offline
 
-    getattr(planning, name)(cfg)
+    offline(cfg)
 
 
 COMMANDS = {
@@ -77,7 +77,7 @@ def main():
         dest="command", required=True)
     cmd = sub.add_parser("offline", help="Δxyz on clips of test episodes")
     cmd.add_argument("--config", default="configs/planning/offline.yaml")
-    cmd.set_defaults(fn=lambda cfg: plan("offline", cfg))
+    cmd.set_defaults(fn=plan_offline)
 
     sub = groups.add_parser("policy", help="policies in robosuite").add_subparsers(dest="command", required=True)
     cmd = sub.add_parser("eval", help="closed loop on collected test episodes")

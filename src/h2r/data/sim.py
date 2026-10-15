@@ -45,16 +45,21 @@ def scripted(rng, obs, task, frameskip):
             w, hold = min(w + 1, len(wps) - 1), 0
 
 
-def random(rng, obs, task, frameskip):
+def random_action(rng, obs, task):
     """Uniform random translation and gripper; pushes outside the workspace are cancelled"""
     low, high = np.array(task["low"]), np.array(task["high"])
+    a = np.zeros(7)
+    a[:3] = rng.uniform(-1, 1, 3)
+    a[6] = rng.choice([-1, 1])
+    eef = obs["robot0_eef_pos"]
+    a[:3][((eef <= low) & (a[:3] < 0)) | ((eef >= high) & (a[:3] > 0))] = 0  # keep the gripper in view
+    return a
+
+
+def random(rng, obs, task, frameskip):
+    """random_action in the generator protocol of the collection"""
     while True:
-        a = np.zeros(7)
-        a[:3] = rng.uniform(-1, 1, 3)
-        a[6] = rng.choice([-1, 1])
-        eef = obs["robot0_eef_pos"]
-        a[:3][((eef <= low) & (a[:3] < 0)) | ((eef >= high) & (a[:3] > 0))] = 0  # keep the gripper in view
-        obs = yield a
+        obs = yield random_action(rng, obs, task)
 
 
 POLICIES = {"scripted": scripted, "random": random}

@@ -67,3 +67,14 @@ class Controller(nn.Module):
         query = self.act_mlp(a)[:, None]  # the action reads the state
         h = self.readout(query, x, frame_size=n)[:, 0]
         return self.head(self.norm(h)).reshape(*lead, -1)
+
+
+def build_controller(cfg, wm_cfg):
+    """The controller's dimensions come from the world model, the rest from its own config"""
+    idm = wm_cfg["model"]["idm"]
+    return Controller(
+        num_patches=idm["num_patches"],
+        dim=idm["dim"],
+        latent_dim=idm.get("action_dim"),
+        **cfg,
+    )

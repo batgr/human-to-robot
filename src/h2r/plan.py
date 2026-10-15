@@ -18,7 +18,9 @@ import torch
 import yaml
 from PIL import Image
 
-from h2r.training.controller import build_controller, load_world_model, read_episodes
+from h2r.data.dataset import read_episodes
+from h2r.models.controller import build_controller
+from h2r.models.jepa import load_world_model
 from h2r.training.utils import make_logger, prepare_run, setup
 
 
@@ -35,7 +37,7 @@ def load(controller_run, device):
 @torch.no_grad()
 def encode(model, frames, device):
     """(T, H, W, 3) uint8 -> (T, N, D)"""
-    return model.encode({"pixels": torch.from_numpy(np.stack(frames)).permute(0, 3, 1, 2)[None].to(device)})["emb"][0]
+    return model.encode(torch.from_numpy(np.stack(frames)).permute(0, 3, 1, 2)[None].to(device))[0]
 
 
 @torch.no_grad()

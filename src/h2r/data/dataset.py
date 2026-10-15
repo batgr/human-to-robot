@@ -1,4 +1,4 @@
-"""Clips of consecutive frames read from the frame shards made by h2r.data.prepare"""
+"""Clips and episodes read from the frame shards made by h2r.data.prepare"""
 
 import io
 from pathlib import Path
@@ -31,3 +31,12 @@ class ClipDataset(Dataset):
         jpegs = self.frames[v].values[s : s + self.clip_len]
         frames = [np.asarray(Image.open(io.BytesIO(j.as_py()))) for j in jpegs]
         return torch.from_numpy(np.stack(frames)).permute(0, 3, 1, 2)
+
+
+def read_episodes(root, split):
+    """Videos of a split that have actions (videos without, e.g. human ones, are for the world model only)"""
+    tables = [
+        pq.read_table(p, columns=["video", "frames", "actions"])
+        for p in sorted(Path(root, "frames").glob(f"{split}-*.parquet"))
+    ]
+    return [row for t in tables for row in t.to_pylist() if row["actions"] is not None]

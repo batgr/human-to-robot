@@ -14,9 +14,8 @@ N, D, A = 16, 32, 7
 class StubWorldModel:
     """encode: one embedding per frame from its mean pixel; idm: difference of consecutive embeddings"""
 
-    def encode(self, info):
-        px = info["pixels"].float()
-        return {"emb": px.mean(dim=(2, 3, 4))[..., None, None].expand(-1, -1, N, D)}
+    def encode(self, pixels):
+        return pixels.float().mean(dim=(2, 3, 4))[..., None, None].expand(-1, -1, N, D)
 
     def idm(self, emb):
         return emb[:, 1:, 0] - emb[:, :-1, 0], torch.tensor(0.0)
@@ -76,7 +75,7 @@ def test_videos_without_actions_are_skipped(tmp_path):
     import pyarrow as pa
     import pyarrow.parquet as pq
 
-    from h2r.training.controller import read_episodes
+    from h2r.data.dataset import read_episodes
 
     (tmp_path / "frames").mkdir()
     rows = [episode(3, 2), {"video": "human", "frames": [jpeg(0)] * 3, "actions": None}]

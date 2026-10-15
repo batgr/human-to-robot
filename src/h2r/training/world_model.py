@@ -10,10 +10,8 @@ from einops import rearrange
 from torch.utils.data import DataLoader
 
 from h2r.data.dataset import ClipDataset
-from h2r.models.encoder import FrozenEncoder
-from h2r.models.idm import IDM
-from h2r.models.jepa import JEPA
-from h2r.models.module import MLP, ARPredictor, PatchProjector, SIGReg
+from h2r.models.jepa import build_model
+from h2r.models.module import SIGReg
 from h2r.training.utils import (
     download_data,
     init_wandb,
@@ -26,16 +24,6 @@ from h2r.training.utils import (
     setup,
     warmup_cosine,
 )
-
-
-def build_model(cfg):
-    return JEPA(
-        FrozenEncoder(**cfg["encoder"]),
-        ARPredictor(**cfg["predictor"]),
-        IDM(**cfg["idm"]),
-        PatchProjector(**cfg["projector"]),
-        MLP(**cfg["pred_proj"]),
-    )
 
 
 def build_optimizers(model, cfg, total_steps):
@@ -58,7 +46,7 @@ def build_optimizers(model, cfg, total_steps):
 def losses(model, sigreg, clip, cfg, t=None):
     """clip: (B, C + K, 3, H, W) uint8 -> dict of losses"""
     C, K = cfg["context"], cfg["rollout_steps"]
-    emb = model.encode({"pixels": clip})["emb"]  # (B, C + K, N, D)
+    emb = model.encode(clip)  # (B, C + K, N, D)
     z, kl = model.idm(emb)  # (B, C + K - 1, D)
 
     # teacher forcing: frames 1..C predict frames 2..C+1
@@ -82,7 +70,7 @@ def losses(model, sigreg, clip, cfg, t=None):
 
     sig = sigreg(rearrange(emb.float(), "b t n d -> (t n) b d"))
     loss = tf + ro + cfg["loss"]["beta"] * kl + cfg["loss"]["sigreg"] * sig
-    return {"loss": loss, "tf": tf, "ro": ro, "kl": kl, "sigreg": sig}, emb, z
+    return {"loss": loss, "tf": tf, "ro": ro, "kl": kl, "sigreg": sig}
 
 
 @torch.no_grad()
@@ -93,7 +81,7 @@ def evaluate(model, sigreg, loader, cfg, device, autocast):
     for clip in loader:
         clip = clip.to(device, non_blocking=True)
         with autocast:
-            out, _, _ = losses(model, sigreg, clip, cfg, t=C)
+            out = losses(model, sigreg, clip, cfg, t=C)
         for k, v in out.items():
             sums[k] = sums.get(k, 0) + v.item() * len(clip)
         n += len(clip)
@@ -122,7 +110,7 @@ def build_loaders(data, batch_size, device):
 
 def train_step(model, sigreg, clip, cfg, opts, scheds, trainable, autocast):
     with autocast:
-        out, _, _ = losses(model, sigreg, clip, cfg)
+        out = losses(model, sigreg, clip, cfg)
     for o in opts:
         o.zero_grad(set_to_none=True)
     out["loss"].backward()

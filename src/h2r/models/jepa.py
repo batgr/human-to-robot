@@ -2,9 +2,16 @@
 # Copyright (c) 2026 Lucas Maes — MIT License, see LICENSES/LeWM-MIT.txt
 """JEPA Implementation"""
 
+from pathlib import Path
+
 import torch
+import yaml
 from einops import rearrange
 from torch import nn
+
+from h2r.models.encoder import FrozenEncoder
+from h2r.models.idm import IDM
+from h2r.models.module import MLP, ARPredictor, PatchProjector
 
 
 class JEPA(nn.Module):
@@ -25,19 +32,19 @@ class JEPA(nn.Module):
         self.projector = projector or nn.Identity()
         self.pred_proj = pred_proj or nn.Identity()
 
-    def encode(self, info):
+    def encode(self, pixels):
         """Encode observations into embeddings.
-        info: dict with pixels key
+        pixels: (B, T, 3, H, W) in [0, 255]
+        returns emb: (B, T, N, D)
         """
 
-        pixels = info["pixels"].float()
+        pixels = pixels.float()
         b = pixels.size(0)
         pixels = rearrange(pixels, "b t ... -> (b t) ...")  # flatten for encoding
         output = self.encoder(pixels, interpolate_pos_encoding=True)
         pixels_emb = output.last_hidden_state[:, 1:]  # patch tokens (drop cls)
         emb = self.projector(pixels_emb)  # (B*T, N, D)
-        info["emb"] = rearrange(emb, "(b t) n d -> b t n d", b=b)
-        return info
+        return rearrange(emb, "(b t) n d -> b t n d", b=b)
 
     def predict(self, emb, z):
         """Predict next state embedding
@@ -80,3 +87,27 @@ class JEPA(nn.Module):
     def get_cost(self, emb, latents, goal, actions, controller, history_size=3):
         """Cost of each candidate action sequence: (B, S)"""
         return self.criterion(self.rollout(emb, latents, actions, controller, history_size), goal)
+
+
+def build_model(cfg):
+    return JEPA(
+        FrozenEncoder(**cfg["encoder"]),
+        ARPredictor(**cfg["predictor"]),
+        IDM(**cfg["idm"]),
+        PatchProjector(**cfg["projector"]),
+        MLP(**cfg["pred_proj"]),
+    )
+
+
+def load_world_model(run_dir, device):
+    """Frozen world model of a training run (config.yaml + best.pt)"""
+    run_dir = Path(run_dir)
+    if not (run_dir / "best.pt").exists():
+        raise FileNotFoundError(f"world_model: no best.pt in {run_dir}")
+    cfg = yaml.safe_load(open(run_dir / "config.yaml"))
+    model = build_model(cfg["model"]).to(device)
+    model.load_state_dict(
+        torch.load(run_dir / "best.pt", map_location=device)["model"], strict=False
+    )
+    model.eval().requires_grad_(False)
+    return model, cfg

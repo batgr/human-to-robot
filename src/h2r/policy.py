@@ -20,7 +20,7 @@ import yaml
 from PIL import Image
 
 from h2r.data.prepare import extract_frames, split_of, states_to_actions
-from h2r.data.sim import random
+from h2r.data.sim import random_action
 from h2r.envs.robosuite_env import RobosuiteEnv
 from h2r.plan import context_latents, encode, load, plan
 from h2r.training.utils import make_logger, prepare_run, setup
@@ -31,17 +31,14 @@ class RandomPolicy:
     (the random policy of h2r data collect)"""
 
     def __init__(self, cfg, sim_cfg, device):
-        self.task, self.frameskip = sim_cfg["tasks"][cfg["task"]], sim_cfg["frameskip"]
+        self.task = sim_cfg["tasks"][cfg["task"]]
         self.rng = np.random.default_rng(cfg["seed"])
 
     def reset(self, episode):
-        self.actions = None
+        pass
 
     def __call__(self, obs, state):
-        if self.actions is None:
-            self.actions = random(self.rng, obs, self.task, self.frameskip)
-            return next(self.actions)
-        return self.actions.send(obs)
+        return random_action(self.rng, obs, self.task)
 
 
 class PlannerPolicy:

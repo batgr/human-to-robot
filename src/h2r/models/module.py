@@ -81,10 +81,8 @@ class Attention(nn.Module):
         inner_dim = dim_head * heads
         project_out = not (heads == 1 and dim_head == dim)
         self.heads = heads
-        self.scale = dim_head**-0.5
         self.dropout = dropout
         self.norm = nn.LayerNorm(dim)
-        self.attend = nn.Softmax(dim=-1)
         self.to_qkv = nn.Linear(dim, inner_dim * 3, bias=False)
         self.to_out = (
             nn.Sequential(nn.Linear(inner_dim, dim), nn.Dropout(dropout))
@@ -246,54 +244,15 @@ class Transformer(nn.Module):
             self.layers.append(
                 block_class(hidden_dim, heads, dim_head, mlp_dim, dropout)
             )
+        self.conditional = block_class is ConditionalBlock  # AdaLN blocks read c, the others a causal flag
 
     def forward(self, x, c=None, causal=True, frame_size=1):
-
-        if hasattr(self, "input_proj"):
-            x = self.input_proj(x)
-
-        if c is not None and hasattr(self, "cond_proj"):
+        x = self.input_proj(x)
+        if self.conditional:
             c = self.cond_proj(c)
-
         for block in self.layers:
-            x = (
-                block(x, causal, frame_size)
-                if isinstance(block, Block)
-                else block(x, c, frame_size)
-            )
-        x = self.norm(x)
-
-        if hasattr(self, "output_proj"):
-            x = self.output_proj(x)
-        return x
-
-
-class Embedder(nn.Module):
-    def __init__(
-        self,
-        input_dim=10,
-        smoothed_dim=10,
-        emb_dim=10,
-        mlp_scale=4,
-    ):
-        super().__init__()
-        self.patch_embed = nn.Conv1d(input_dim, smoothed_dim, kernel_size=1, stride=1)
-        self.embed = nn.Sequential(
-            nn.Linear(smoothed_dim, mlp_scale * emb_dim),
-            nn.SiLU(),
-            nn.Linear(mlp_scale * emb_dim, emb_dim),
-        )
-
-    def forward(self, x):
-        """
-        x: (B, T, D)
-        """
-        x = x.float()
-        x = x.permute(0, 2, 1)
-        x = self.patch_embed(x)
-        x = x.permute(0, 2, 1)
-        x = self.embed(x)
-        return x
+            x = block(x, c, frame_size) if self.conditional else block(x, causal, frame_size)
+        return self.output_proj(self.norm(x))
 
 
 class MLP(nn.Module):

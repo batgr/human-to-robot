@@ -6,12 +6,12 @@ import math
 from pathlib import Path
 
 import numpy as np
-import pyarrow.parquet as pq
 import torch
-import yaml
 from PIL import Image
 
-from h2r.models.controller import Controller
+from h2r.data.dataset import read_episodes
+from h2r.models.controller import build_controller
+from h2r.models.jepa import load_world_model
 from h2r.training.utils import (
     download_data,
     init_wandb,
@@ -24,21 +24,6 @@ from h2r.training.utils import (
     setup,
     warmup_cosine,
 )
-from h2r.training.world_model import build_model
-
-
-def load_world_model(run_dir, device):
-    """Frozen world model of a training run (config.yaml + best.pt)"""
-    run_dir = Path(run_dir)
-    if not (run_dir / "best.pt").exists():
-        raise FileNotFoundError(f"world_model: no best.pt in {run_dir}")
-    cfg = yaml.safe_load(open(run_dir / "config.yaml"))
-    model = build_model(cfg["model"]).to(device)
-    model.load_state_dict(
-        torch.load(run_dir / "best.pt", map_location=device)["model"], strict=False
-    )
-    model.eval().requires_grad_(False)
-    return model, cfg
 
 
 def world_model_info(run_dir):
@@ -48,15 +33,6 @@ def world_model_info(run_dir):
         "run": str(run_dir),
         "git": json.load(open(meta)).get("git") if meta.exists() else None,
     }
-
-
-def read_episodes(root, split):
-    """Videos of a split that have actions (videos without, e.g. human ones, are for the world model only)"""
-    tables = [
-        pq.read_table(p, columns=["video", "frames", "actions"])
-        for p in sorted(Path(root, "frames").glob(f"{split}-*.parquet"))
-    ]
-    return [row for t in tables for row in t.to_pylist() if row["actions"] is not None]
 
 
 @torch.no_grad()
@@ -72,7 +48,7 @@ def encode_episodes(model, episodes, device, chunk=64):
         px = torch.from_numpy(frames).permute(0, 3, 1, 2)
         emb = torch.cat(
             [
-                model.encode({"pixels": px[i : i + chunk].to(device)[None]})["emb"][0]
+                model.encode(px[i : i + chunk].to(device)[None])[0]
                 for i in range(0, len(px), chunk)
             ]
         )  # (T, N, D)
@@ -98,17 +74,6 @@ def cached_transitions(model, cfg, split, device, log):
     path.parent.mkdir(parents=True, exist_ok=True)
     torch.save(data, path)
     return data
-
-
-def build_controller(cfg, wm_cfg):
-    """The controller's dimensions come from the world model, the rest from its own config"""
-    idm = wm_cfg["model"]["idm"]
-    return Controller(
-        num_patches=idm["num_patches"],
-        dim=idm["dim"],
-        latent_dim=idm.get("action_dim"),
-        **cfg,
-    )
 
 
 def controller_loss(ctrl, s, a, mu):
