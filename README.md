@@ -22,6 +22,13 @@ uv sync
    uv run h2r data push
    ```
 
+Simulation episodes with actions (robosuite), written to `raw/` like any video folder:
+
+```bash
+uv run h2r data collect --config configs/data/sim.yaml   # <task>/<policy>/episode_<seed>/: videos, state.parquet, sim.parquet
+uv run h2r data extract --config configs/data/sim.yaml   # actions: end-effector deltas, as for DROID
+```
+
 ## Training
 
 ```bash

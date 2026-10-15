@@ -1,0 +1,47 @@
+# robosuite episodes: h2r data collect writes raw_dir, then h2r data extract and push as for any video folder.
+
+raw_dir: data/raw/sim/            # <task>/<policy>/episode_<seed>/: <camera>.mp4, state.parquet, sim.parquet
+processed_dir: data/h2r-sim/
+
+# collect
+tasks:                            # task -> object observation and workspace (world frame) for the policies
+  Lift:
+    object: cube_pos
+    low: [-0.15, -0.15, 0.83]
+    high: [0.10, 0.15, 0.95]
+  PickPlaceCan:
+    object: Can_pos
+    low: [-0.05, -0.40, 0.88]
+    high: [0.22, -0.05, 1.02]
+policies: [scripted, random]
+episodes: 500                     # per task and policy; episode k uses seed k
+steps: 40                         # actions per episode (steps + 1 frames)
+frameskip: 5                      # control steps per action: 20 Hz / 5 = 4 actions per second
+cameras: [agentview]              # one video per camera, e.g. [agentview, frontview] (cameras of every task)
+video_crf: 12                     # H.264 quality (lower = closer to lossless)
+
+env:
+  robots: Panda
+  has_renderer: false
+  has_offscreen_renderer: true
+  use_camera_obs: true
+  camera_heights: 224
+  camera_widths: 224
+  control_freq: 20
+  horizon: 100000
+
+# extract
+fps: 4                            # = control_freq / frameskip: keeps every frame
+image_size: 224
+min_frames: 5
+actions: true                     # from state.parquet: end-effector deltas, as for DROID
+split_by: folder                  # the cameras of an episode stay in the same split
+
+split:
+  val: 0.1
+  test: 0.1
+  seed: 0
+
+shard_size: 250
+hf_repo: batgre/h2r-sim-v2      # the existing batgre/h2r-sim has the older format
+private: false

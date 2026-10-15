@@ -4,7 +4,7 @@ import argparse
 
 import yaml
 
-from h2r.data import prepare
+from h2r.data import prepare, sim
 
 
 def train(cfg):
@@ -21,6 +21,11 @@ def train_controller(cfg):
 
 COMMANDS = {
     "data": {
+        "collect": (
+            sim.collect,
+            "robosuite episodes -> raw videos, states and simulator data",
+            "configs/data/sim.yaml",
+        ),
         "extract": (
             prepare.extract,
             "raw videos -> frame shards",
