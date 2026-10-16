@@ -60,6 +60,26 @@ failure in `outputs/try/episode_success.png` and `episode_failure.png`.
 | Controller | real action and current state -> latent action | robot episodes with actions |
 | Planner | current frames, goal frame -> next action | none (CEM over real actions, replans after every observation) |
 
+## Training recipe
+
+| | World models | Controllers |
+|---|---|---|
+| Data | phone: 65 videos, 2,580 frames; robots: 102 videos, 2,587 frames (4 fps, 224 px) | 1,542 robosuite episodes, 61,700 transitions (Panda, Lift, scripted and random) |
+| Trained | projector (DINOv2-small patches -> 4 x 4 x 128), predictor (6 layers), IDM (2 layers) | 2 attention layers on the current state + action embedding |
+| Objective | prediction MSE + SIGReg (0.09) + KL of the latent action (beta 1e-3) | L2 to the IDM's latent action |
+| Unrolled | context 3 frames; rollout K from 1 to 5 over the first half (scheduled sampling) | one step |
+| Optimizer | Muon 0.02 (matrices) + AdamW 2.2e-4, weight decay 0.04, warmup 10%, cosine, clip 1.0 | AdamW 1e-3, weight decay 0.04, warmup 300, cosine |
+| Batch, steps | 128 clips of 8 frames, 1,000 steps (about 60 passes) | 256 transitions, 4,000 steps (about 17 passes) |
+| Kept | best validation skill, checked every 50 steps | best validation loss, checked every 100 steps |
+
+The encoder is frozen. Both world models get the same code, steps and number of training frames, so that only the video
+differs. With about 2,000 clips the world models see each one many times: the predictor's dropout (0.1), the weight
+decay and the checkpoint chosen on validation guard against overfitting. The controllers have 30 times more transitions
+than in the earlier small-budget runs, which overfit after 250 steps.
+
+Planner: CEM over Δxyz and the gripper (rotations at 0), 300 samples, 10 elites, 10 iterations, horizon 5, the first
+action executed and the plan made again after every observation; goal frames: pre-grasp, grasp and lift.
+
 ## Usage
 
 ### Setup
@@ -94,7 +114,7 @@ uv run h2r data push
 
 ```bash
 uv run h2r train --set name=wm-phone data.root=data/h2r-phone/ data.hf_repo=batgre/h2r-phone
-uv run h2r train --set name=wm-robots data.root=data/h2r-robots-1h30/ data.hf_repo=batgre/h2r-robots-1h30 data.max_videos=87
+uv run h2r train --set name=wm-robots data.root=data/h2r-robots-1h30/ data.hf_repo=batgre/h2r-robots-1h30 data.max_videos=102
 uv run h2r controller train --set name=ctrl-phone world_model=outputs/wm-phone
 ```
 
