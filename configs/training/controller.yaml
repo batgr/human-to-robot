@@ -1,7 +1,7 @@
-name: controller
+name: ctrl-phone-h2
 seed: 0
 model: configs/models/controller.yaml
-world_model: outputs/h2r       # trained world model run (config.yaml + best.pt); the controller belongs to it
+world_model: outputs/wm-phone-h2 # trained world model run (config.yaml + best.pt); the controller belongs to it
 output_dir: outputs
 
 data:
@@ -18,9 +18,9 @@ optim:
   lr: 0.001
   weight_decay: 0.04
   warmup: 300                    # iterations
-iterations: 3000
+iterations: 4000
 batch_size: 256
-eval_every: 250
+eval_every: 100
 precision: bf16
 
 wandb:

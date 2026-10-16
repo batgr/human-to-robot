@@ -12,33 +12,25 @@ We compare models trained on personally recorded human videos and videos of real
 
 ## Run the simulation
 
-Run the **pretrained** human-video world model and controller in Robosuite Panda Lift. No training is required. From the repository root:
+Run the **pretrained** human-video world model and its controller in Robosuite (Panda, Lift). No training is required:
 
 ```bash
 uv sync
 
-uv run hf download batgre/h2r-lift \
-  --local-dir outputs \
-  --include "wm-phone-h2/*" \
-  --include "ctrl-phone-h2/*"
+# the world model and controller, then the simulated test episodes (initial states and goal frames)
+uv run hf download batgre/h2r-lift --local-dir outputs --include "wm-phone-h2/*" --include "ctrl-phone-h2/*"
+uv run hf download batgre/h2r-sim-v3 --repo-type dataset --local-dir data/h2r-sim --include "raw/Panda/Lift/scripted/*"
 
-uv run hf download batgre/h2r-sim-v3 \
-  --repo-type dataset \
-  --local-dir data/h2r-sim \
-  --include "raw/Panda/Lift/scripted/*"
-
-uv run h2r eval pick --set \
-  name=demo-phone-h2 \
-  controller=outputs/ctrl-phone-h2 \
-  "policies=[planner]" \
-  episodes=5 \
-  planner.horizon=2
+# the planner on 5 test episodes, in a window
+uv run h2r eval pick --set name=demo episodes=5 render=true
 ```
 
-The simulator restores five held-out initial states and runs the CEM planner in closed loop: execute one robot action, observe the result, and replan. Results are written to `outputs/demo-phone-h2/results.json`; a filmstrip of an unsuccessful episode is saved as `outputs/demo-phone-h2/episode_failure.png`. A success filmstrip is only saved if an episode succeeds.
+For each episode the simulator is restored to a held-out initial state, and the CEM planner runs in closed loop: it executes one robot action, observes the result and plans again. `render=true` shows the camera the world model sees; without it the evaluation runs headless. Results go to `outputs/demo/results.json`, with the frames of a failed episode in `episode_failure.png` (and of a success in `episode_success.png`, if there is one). In the reported runs the planner never lifted the cube.
 
-This is a **headless evaluation** that saves images and metrics, not a live GUI or MP4 video. In the reported runs, the planner did not successfully lift the cube.
+![Robosuite Lift: the demonstration's actions replayed](docs/figures/pick-replay-success.png)
+![Run 2 planner, human-video world model](docs/figures/pick-phone-h2-failure.png)
 
+*Same test episode, from the same initial state. Top: the demonstration's actions replayed, the cube is lifted at step 12 (counted as a success) and dropped later, since the replay is open loop. Bottom: the planner with the human-video world model barely moves the arm. The last three frames of each row are the subgoal and goal frames given to the planner.*
 
 ## Architecture
 
@@ -196,11 +188,11 @@ This is an experimental test of whether learned visual dynamics are usable for a
 
 Thus the current results support limited in-domain learning of action-conditioned visual dynamics, **not successful human-to-robot transfer**.
 
-**Example failures (Run 2).** Each filmstrip shows the executed episode followed by the provided visual subgoals and final goal.
-
-![Run 2: failed Robosuite Lift episode using the model trained on iPhone videos](docs/figures/pick-phone-h2-failure.png)
+**Example failure (Run 2), robot-video world model**, on the same test episode as above: the arm moves a lot, goes down next to the cube and wanders around it. Each filmstrip shows the executed episode followed by the given subgoals and goal.
 
 ![Run 2: failed Robosuite Lift episode using the model trained on real-robot videos](docs/figures/pick-robots-h2-failure.png)
+
+Run 1, same episode: [human-video model](docs/figures/pick-phone-failure.png) (the arm rises out of view), [robot-video model](docs/figures/pick-robots-failure.png) (the arm goes over the cube and down without grasping it).
 
 ### Why the planner fails
 
@@ -214,7 +206,7 @@ Diagnostics on 10 held-out Robosuite episodes ([`src/h2r/eval/`](src/h2r/eval)) 
 | Offline planning Δxyz, planner / no motion | 10.9 / 2.8 cm | 33.3 / 2.8 cm |
 | Same, each step capped at 2 cm | 4.6 / 2.8 cm | 5.3 / 2.8 cm |
 
-*Counterfactual direction: cosine between predicted and real differences of outcomes when several command sequences are played from one state. Offline planning follows Garrido et al.: 64 random clips, the real frame H steps ahead as goal, no simulator; Δxyz is the L1 distance between the summed planned and recorded displacements.*
+*Counterfactual direction: cosine between predicted and real differences of outcomes when several command sequences are played from one state. Offline planning follows Garrido et al.: 64 random clips of 30 test episodes, the real frame H steps ahead as goal, no simulator; Δxyz is the L1 distance between the summed planned and recorded displacements.*
 
 1. **The world models do not predict the simulation.** Every model predicts Robosuite frames worse than persistence, with the IDM's own latent actions too. None saw a simulated frame in training.
 2. **The command is lost before the prediction.** With the IDM's latent actions, predicted outcomes follow the commands a little (direction 0.22 for both). Through the controller, the human-video model's no longer do (-0.01); the robot-video model's keep most of it (0.15). The run 2 human-video controller is also the weakest (validation R² 0.51, against 0.72 for the robot-video one).
@@ -233,37 +225,37 @@ The interface is not the cause: replaying the demonstration's measured actions t
 
 ## Reproduce
 
-`lift.ipynb` runs every step below on Colab, in order.
+The configs in `configs/` hold the Run 2 settings, with the human videos as the default. `lift.ipynb` runs every step on Colab, in order.
 
 ```bash
 uv sync
 uv run hf auth login && uv run wandb login     # ffmpeg is also needed (brew install ffmpeg on macOS)
+
+# human videos, pinned to the Run 2 version (robot videos and simulated episodes download on first use)
+uv run hf download batgre/h2r-phone --repo-type dataset --local-dir data/h2r-phone \
+  --revision 815bfb769aa6fc2059fe746381473915a2fb665d --exclude "raw/*"
+
+# world models: 1,000 steps on video only
+uv run h2r train                                                        # human videos -> outputs/wm-phone-h2
+uv run h2r train --set name=wm-robots-h2 data.max_videos=173 \
+  data.root=data/h2r-robots-1h30/ data.hf_repo=batgre/h2r-robots-1h30   # robot videos -> outputs/wm-robots-h2
+
+# controllers: 4,000 steps on the simulated episodes, world model frozen
+uv run h2r controller train                                             # -> outputs/ctrl-phone-h2
+uv run h2r controller train --set name=ctrl-robots-h2 world_model=outputs/wm-robots-h2
+
+# pick success on 30 test episodes
+uv run h2r eval pick --set name=pick-baselines "policies=[random, replay]"
+uv run h2r eval pick --set name=pick-phone-h2
+uv run h2r eval pick --set name=pick-robots-h2 controller=outputs/ctrl-robots-h2
+
+# diagnostics on 10 test episodes (offline planning in the tables: episodes=30)
+for d in prediction counterfactual ranking interface planning; do
+  uv run h2r eval $d --set name=diag-phone-h2
+done
 ```
 
-The pretrained simulation example is provided in [Run the simulation](#run-the-simulation) above.
-
-**Train again** (data, world models, controllers, pick):
-
-```bash
-uv run hf download batgre/h2r-phone --repo-type dataset --revision 815bfb769aa6fc2059fe746381473915a2fb665d --local-dir data/h2r-phone --exclude "raw/*"
-uv run hf download batgre/h2r-robots-1h30 --repo-type dataset --local-dir data/h2r-robots-1h30
-uv run hf download batgre/h2r-sim-v3 --repo-type dataset --local-dir data/h2r-sim
-
-H="rollout_steps.end=2 val_horizon=2 iterations=1000 eval_every=50"
-uv run h2r train --set name=wm-phone-h2 data.root=data/h2r-phone/ data.hf_repo=batgre/h2r-phone $H
-uv run h2r train --set name=wm-robots-h2 data.root=data/h2r-robots-1h30/ data.hf_repo=batgre/h2r-robots-1h30 data.max_videos=173 $H
-uv run h2r controller train --set name=ctrl-phone-h2 world_model=outputs/wm-phone-h2 iterations=4000 eval_every=100
-uv run h2r controller train --set name=ctrl-robots-h2 world_model=outputs/wm-robots-h2 iterations=4000 eval_every=100
-
-uv run h2r eval pick --set name=pick-baselines-v3 "policies=[random, replay]" episodes=30
-uv run h2r eval pick --set name=pick-phone-h2 "policies=[planner]" controller=outputs/ctrl-phone-h2 episodes=30 planner.horizon=2
-uv run h2r eval prediction --set controller=outputs/ctrl-phone-h2 horizon=2        # also counterfactual, ranking, planning, interface
-```
-
-Every command takes `--config` and `--set key=value ...` (nested keys with dots). A run goes to `outputs/<name>`;
-running a training again continues it from `last.pt`, and an evaluation that already wrote `results.json` is skipped.
-`h2r data extract`, `h2r data collect` and `h2r data push` rebuild the datasets (`configs/data/`). Tests:
-`uv run pytest`.
+A run goes to `outputs/<name>`. Every command takes `--set key=value ...` to change a setting of its config (nested keys with dots) and `--config` to use another config. Running a training again continues it from `last.pt`; an evaluation that already wrote `results.json` is skipped. Run 1: `rollout_steps.end=5 val_horizon=5` for the world models, `planner.horizon=5` for the evaluations (and `horizon=5` for the diagnostics), the human videos at revision `668913068cc77e2cb195a8b3a88a4d87fd317fb1` and `data.max_videos=102` for the robot videos. `h2r data extract`, `h2r data collect` and `h2r data push` rebuild the datasets (`configs/data/`). Tests: `uv run pytest`.
 
 ## Experimental setup and limitations
 

@@ -1,8 +1,8 @@
 # Pick success in closed loop on held-out test episodes (h2r eval pick): the central measure.
 name: pick
 seed: 0
-policies: [random, replay, planner]    # names in h2r.eval.pick.POLICIES, all run on the same initial states
-controller: outputs/controller        # planner only: trained controller run; its world_model entry gives the world model
+policies: [planner]                    # random, replay, planner (h2r.eval.pick.POLICIES), on the same initial states
+controller: outputs/ctrl-phone-h2     # planner only: trained controller run; its world_model entry gives the world model
 sim_config: configs/data/sim.yaml      # raw_dir, env, frameskip and split of the collected episodes
 output_dir: outputs
 
@@ -10,8 +10,7 @@ robot: Panda
 task: Lift
 episodes_from: scripted                # collected policy whose test episodes give the initial states and goals
 camera: agentview
-episodes: 50                           # test episodes where the object was lifted; paired across arms. Final
-                                       # results: 100 (Wilson 95% about ±10 points)
+episodes: 30                           # test episodes where the object was lifted; paired across policies
 start: 2                               # t0: frame the simulator is reset to (earlier frames: planner context)
 goal: lift                             # frame where the object is highest (offset: frame t0 + goal_offset)
 goal_offset: 10
@@ -24,7 +23,7 @@ planner:
   context: 3                           # real frames given to the predictor
   past_latents: controller             # measured actions translated by the controller, or idm
   window: 3                            # frames the predictor sees while unrolling
-  horizon: 5                           # H = rollout_steps.end of the world model
+  horizon: 2                           # H = rollout_steps.end of the world model
   samples: 300                         # N
   elites: 10                           # K
   iterations: 10                       # J (LeWM; Garrido et al.: 15)
