@@ -16,8 +16,12 @@ from h2r.plan import context_latents, encode
 
 def episode_dirs(sim_cfg, robot, task, policy, split):
     """Collected episodes of a robot, task and policy in a split, as h2r data extract assigns it (split_by: folder)"""
-    dirs = sorted(d for d in (Path(sim_cfg["raw_dir"]) / robot / task / policy).glob("episode_*") if d.is_dir())
-    return [d for d in dirs if split_of(f"{robot}/{task}/{policy}/{d.name}", sim_cfg["split"]) == split]
+    root = Path(sim_cfg["raw_dir"]) / robot / task / policy
+    episodes = sorted(path for path in root.glob("episode_*") if path.is_dir())
+    return [
+        path for path in episodes
+        if split_of(f"{robot}/{task}/{policy}/{path.name}", sim_cfg["split"]) == split
+    ]
 
 
 def goal_frames(states, sim, cfg):
@@ -34,16 +38,28 @@ def goal_frames(states, sim, cfg):
         return None
     if not cfg.get("subgoals"):
         return [top]
-    closing = np.diff(states[:, 6]) > 0.05  # the gripper closes between frame t and t + 1
-    pre = int(closing.argmax()) if closing.any() else top
-    closed = pre + 1 + int(np.argmax(np.diff(states[pre + 1 :, 6]) < 0.01)) if pre + 1 < top else top
-    return [max(pre, t0 + 1), max(min(closed, top), t0 + 1), top]
+    # The first closing motion marks pre-grasp; the first subsequent near-zero
+    # gripper change marks grasp. Fall back to the lift frame if none is found.
+    gripper_changes = np.diff(states[:, 6])
+    closing = np.flatnonzero(gripper_changes > 0.05)
+    pre_grasp = int(closing[0]) if len(closing) else top
+
+    grasp = top
+    if pre_grasp + 1 < top:
+        settled = np.diff(states[pre_grasp + 1 :, 6]) < 0.01
+        grasp = pre_grasp + 1 + int(settled.argmax())
+
+    first_goal = t0 + 1
+    return [max(pre_grasp, first_goal), max(min(grasp, top), first_goal), top]
 
 
 def load_episode(folder, cfg, sim_cfg):
     """Frames of the camera, robot states [x, y, z, roll, pitch, yaw, gripper], simulator states, t0 and goal frames"""
     video = folder / f"{cfg['camera']}.mp4"
-    frames = [np.asarray(Image.open(io.BytesIO(j))) for j in extract_frames(video, sim_cfg["fps"], sim_cfg["image_size"])]
+    frames = []
+    for jpeg in extract_frames(video, sim_cfg["fps"], sim_cfg["image_size"]):
+        with Image.open(io.BytesIO(jpeg)) as image:
+            frames.append(np.asarray(image))
     states = np.asarray(pq.read_table(folder / "state.parquet")["state"].to_pylist())
     sim = pq.read_table(folder / "sim.parquet").to_pylist()
     return {"name": folder.name, "frames": frames, "t0": cfg["start"], "goals": goal_frames(states, sim, cfg),
@@ -68,9 +84,18 @@ def held_out_episodes(cfg, sim_cfg):
 def make_env(cfg, sim_cfg):
     """render: true opens a window on the camera the world model sees (robosuite's OpenCV viewer: its native viewer
     needs mjpython on macOS, where the offscreen renderer the planner uses crashes)"""
-    window = {"has_renderer": True, "renderer": "mujoco", "render_camera": cfg["camera"]} if cfg.get("render") else {}
-    env = RobosuiteEnv({"env_name": cfg["task"], "robots": cfg["robot"], "camera_names": [cfg["camera"]],
-                        **sim_cfg["env"], **window})
+    render_options = {}
+    if cfg.get("render"):
+        render_options = {"has_renderer": True, "renderer": "mujoco", "render_camera": cfg["camera"]}
+
+    env_cfg = {
+        "env_name": cfg["task"],
+        "robots": cfg["robot"],
+        "camera_names": [cfg["camera"]],
+        **sim_cfg["env"],
+        **render_options,
+    }
+    env = RobosuiteEnv(env_cfg)
     env.reset()  # once: restore() puts each episode's state back
     return env
 
@@ -97,7 +122,12 @@ def to_command(action, state, gain, offset):
     about 0, closed on the cube about 0.5, closed empty 1)"""
     command = np.zeros(7)
     command[:3] = np.clip(gain * action[:3] + offset, -1, 1)
-    close = action[6] > 0 if abs(action[6]) > 0.05 else state[6] > 0.25
+
+    gripper_delta = action[6]
+    if abs(gripper_delta) > 0.05:
+        close = gripper_delta > 0
+    else:
+        close = state[6] > 0.25
     command[6] = 1.0 if close else -1.0
     return command
 
