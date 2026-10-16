@@ -18,6 +18,7 @@ goal_offset: 10
 subgoals: true                         # also the pre-grasp and grasp frames: the lift is ~30 steps away, beyond H
 steps: 38                              # commands per episode: a collected episode after t0
 filmstrip: planner                     # policy whose first success and first failure are drawn (null: none)
+render: false                          # true: watch the episodes in a window
 
 planner:
   context: 3                           # real frames given to the predictor

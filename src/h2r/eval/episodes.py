@@ -66,8 +66,11 @@ def held_out_episodes(cfg, sim_cfg):
 
 
 def make_env(cfg, sim_cfg):
+    """render: true opens a window on the camera the world model sees (robosuite's OpenCV viewer: its native viewer
+    needs mjpython on macOS, where the offscreen renderer the planner uses crashes)"""
+    window = {"has_renderer": True, "renderer": "mujoco", "render_camera": cfg["camera"]} if cfg.get("render") else {}
     env = RobosuiteEnv({"env_name": cfg["task"], "robots": cfg["robot"], "camera_names": [cfg["camera"]],
-                        **sim_cfg["env"]})
+                        **sim_cfg["env"], **window})
     env.reset()  # once: restore() puts each episode's state back
     return env
 
