@@ -17,8 +17,8 @@ def test_episode_folder(tmp_path):
     cfg = yaml.safe_load(open("configs/data/sim.yaml"))
     cfg.update(raw_dir=str(tmp_path), steps=4, cameras=["agentview", "frontview"])
     cfg["env"].update(camera_heights=64, camera_widths=64)
-    out = episode((cfg, "Lift", "scripted", 0))
-    assert out == tmp_path / "Lift" / "scripted" / "episode_000000"
+    out = episode((cfg, "Panda", "Lift", "scripted", 0))
+    assert out == tmp_path / "Panda" / "Lift" / "scripted" / "episode_000000"
     for cam in cfg["cameras"]:
         assert n_frames(out / f"{cam}.mp4") == 5  # steps + 1 frames, one per action
     state = pq.read_table(out / "state.parquet")

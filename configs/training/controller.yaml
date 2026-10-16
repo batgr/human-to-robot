@@ -8,6 +8,10 @@ data:
   root: data/h2r-droid           # episode shards with actions
   hf_repo: batgre/h2r-droid
   cache: data/cache              # states and IDM targets, encoded once per world model and split
+  include: null                  # fnmatch patterns on video paths, e.g. ["Panda/Lift/*"]; null: every episode
+  max_videos: null               # data budget: at most this many training episodes (see data.dataset.select)
+  seed: 0                        # draws the budget's episodes, as for the world model trained on the same budget
+init_from: null                  # controller run to start from (few-shot transfer, e.g. Panda -> Sawyer)
 
 # Garrido et al. 2026, appendix A
 optim:

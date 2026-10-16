@@ -4,27 +4,38 @@ model: configs/models/world_model.yaml
 output_dir: outputs
 
 data:
-  root: data/h2r-ssv2
-  hf_repo: batgre/h2r-ssv2
-  clip_len: 5
+  root: data/h2r-ssv2-5h     # SSv2, 10 classes x 500 videos (5 h at 4 fps)
+  hf_repo: batgre/h2r-ssv2-5h
+  include: null              # fnmatch patterns on video paths to keep, e.g. ["Panda/Lift/*"]; null: all
+  max_videos: null           # data budget: at most this many training videos (see data.dataset.select)
+  seed: 0                    # draws the budget's videos: the same for every training seed and for the controller
   num_workers: 8
 
-context: 3
-rollout_steps: 2
+init_from: null              # world model run to start from (fine-tuning, e.g. SSv2 then robot videos)
+
+# Train clips: context + rollout_steps.end frames (videos shorter than that give no clip)
+context: 3                   # Terver et al.: 2 frames give the velocity, 3 the acceleration
+rollout_steps:               # K, curriculum (scheduled sampling): teacher forcing first, then own predictions
+  start: 1                   # 1: teacher forcing only
+  end: 5                     # = planning horizon H = val_horizon: trained as deep as it is used
+  ramp: 0.5                  # fraction of the iterations to go from start to end, one step at a time
+val_horizon: 5               # validation clips of context + val_horizon frames: skill(h) for h = 1..val_horizon
 
 loss:
-  beta: 0.001
-  sigreg: 0.09
+  beta: 0.001                # KL weight: ~13 nats per transition on SSv2, about a 7-dof action (Garrido et al. range)
+  sigreg: 0.09               # LeWM; the statistic is multiplied by the batch size, so this goes with batch_size 128
 
+# Garrido et al. 2026 at batch 1024, scaled to ours
 optim:
-  muon_lr: 0.02
-  adamw_lr: 0.000625
+  muon_lr: 0.02              # orthogonalized updates: independent of the gradient scale, kept
+  adamw_lr: 0.00022          # 6.25e-4 x sqrt(128 / 1024), square-root rule for Adam (Malladi et al. 2022)
   weight_decay: 0.04
-  warmup: 0.1
+  warmup: 0.1                # fraction of the iterations
   grad_clip: 1.0
 
-batch_size: 128
-epochs: 50
+batch_size: 128              # LeWM; 16 collapsed the embeddings
+iterations: 5000             # fixed compute, whatever the data budget (G1 compares budgets at equal compute)
+eval_every: 250
 precision: bf16
 
 wandb:

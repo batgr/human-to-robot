@@ -1,4 +1,7 @@
-"""Train the controller (real action + current frame -> latent action) on episodes with actions."""
+"""Train the controller (real action + current frame -> latent action) on episodes with actions.
+
+Data budget: data.include and data.max_videos select the same episodes as the world model trained on that budget.
+Few-shot transfer (e.g. to another robot): init_from a trained controller."""
 
 import io
 import json
@@ -9,7 +12,7 @@ import numpy as np
 import torch
 from PIL import Image
 
-from h2r.data.dataset import read_episodes
+from h2r.data.dataset import read_episodes, select
 from h2r.models.controller import build_controller
 from h2r.models.jepa import load_world_model
 from h2r.training.utils import (
@@ -37,8 +40,8 @@ def world_model_info(run_dir):
 
 @torch.no_grad()
 def encode_episodes(model, episodes, device, chunk=64):
-    """Transitions of every episode: s_t (M, N, D) in fp16, a_t (M, act_dim), mu_t (M, d_a)"""
-    states, actions, targets = [], [], []
+    """Transitions of every episode: s_t (M, N, D) in fp16, a_t (M, act_dim), mu_t (M, d_a), video (M,)"""
+    states, actions, targets, videos = [], [], [], []
     for ep in episodes:
         if len(ep["actions"]) != len(ep["frames"]) - 1:
             raise ValueError(
@@ -56,11 +59,13 @@ def encode_episodes(model, episodes, device, chunk=64):
         states.append(emb[:-1].half().cpu())
         targets.append(mu.float().cpu())
         actions.append(torch.tensor(ep["actions"], dtype=torch.float32))
-    return {"s": torch.cat(states), "a": torch.cat(actions), "mu": torch.cat(targets)}
+        videos += [ep["video"]] * len(mu)
+    return {"s": torch.cat(states), "a": torch.cat(actions), "mu": torch.cat(targets), "video": videos}
 
 
 def cached_transitions(model, cfg, split, device, log):
-    """Encoded transitions of a split, computed once per world model run"""
+    """Encoded transitions of a split, computed once per world model run (every episode: the selection is applied
+    after, by select_transitions)"""
     wm = Path(cfg["world_model"])
     path = (
         Path(cfg["data"]["cache"])
@@ -74,6 +79,14 @@ def cached_transitions(model, cfg, split, device, log):
     path.parent.mkdir(parents=True, exist_ok=True)
     torch.save(data, path)
     return data
+
+
+def select_transitions(data, include=None, max_videos=None, seed=0):
+    """Transitions of the videos that data.dataset.select keeps"""
+    videos = list(dict.fromkeys(data["video"]))
+    keep = {videos[i] for i in select(videos, include, max_videos, seed)}
+    idx = torch.tensor([i for i, v in enumerate(data["video"]) if v in keep], dtype=torch.long)
+    return {k: v[idx] for k, v in data.items() if k != "video"}
 
 
 def controller_loss(ctrl, s, a, mu):
@@ -100,13 +113,19 @@ def train_controller(cfg):
 
     download_data(cfg["data"])
     wm, wm_cfg = load_world_model(cfg["world_model"], device)
+    data = cfg["data"]
     train, val = (
-        cached_transitions(wm, cfg, split, device, log) for split in ("train", "val")
+        select_transitions(cached_transitions(wm, cfg, split, device, log), data.get("include"), budget, data["seed"])
+        for split, budget in (("train", data.get("max_videos")), ("val", None))
     )
     del wm
+    baseline = (val["mu"] - train["mu"].mean(0)).pow(2).sum(-1).mean().item()  # L2 of always predicting mean mu
 
     ctrl = build_controller(cfg["model"], wm_cfg).to(device)
-    ctrl.set_action_stats(train["a"])
+    if cfg.get("init_from"):  # weights and action standardization of a trained controller
+        ctrl.load_state_dict(torch.load(Path(cfg["init_from"]) / "best.pt", map_location=device)["model"])
+    else:
+        ctrl.set_action_stats(train["a"])
     opt = torch.optim.AdamW(
         ctrl.parameters(),
         lr=cfg["optim"]["lr"],
@@ -156,10 +175,11 @@ def train_controller(cfg):
 
         if step % cfg["eval_every"] == 0 or step == cfg["iterations"]:
             val_loss = evaluate(ctrl, val, device, autocast)
+            r2 = 1 - val_loss / baseline  # 0: no better than the mean latent action
             if wandb:
-                wandb.log({"val/loss": val_loss}, step=step)
+                wandb.log({"val/loss": val_loss, "val/r2": r2}, step=step)
             log(
-                f"step {step}/{cfg['iterations']} | train loss {loss.item():.4f} | val loss {val_loss:.4f}"
+                f"step {step}/{cfg['iterations']} | train loss {loss.item():.4f} | val loss {val_loss:.4f} | val r2 {r2:.3f}"
             )
             if val_loss < best:
                 best = val_loss

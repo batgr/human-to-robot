@@ -1,27 +1,18 @@
-"""Plan with a trained controller: CEM over real actions, scored by JEPA.get_cost, and the offline evaluation.
-
-h2r plan offline: on clips of test episodes, plan from t towards the frame t + H and compare the summed planned
-translation with the real one (Δxyz, Garrido et al. 2026, appendix A). The closed loop in robosuite is in
-h2r.policy (PlannerPolicy).
+"""Plan with a trained controller: CEM over real actions, scored by JEPA.get_cost. The closed loop in robosuite is
+h2r.eval.pick (PlannerPolicy).
 
 The context holds the last real frames and the latent actions linking them: the controller on the executed (measured)
 actions, as for the future, or the IDM on the real pairs (past_latents: idm).
 """
 
-import io
-import json
-import random
 from pathlib import Path
 
 import numpy as np
 import torch
 import yaml
-from PIL import Image
 
-from h2r.data.dataset import read_episodes
 from h2r.models.controller import build_controller
 from h2r.models.jepa import load_world_model
-from h2r.training.utils import make_logger, prepare_run, setup
 
 
 def load(controller_run, device):
@@ -50,56 +41,25 @@ def context_latents(model, ctrl, emb, actions, source):
     return ctrl(actions, emb[:-1])
 
 
+def physical(u, ctrl, cfg):
+    """Standardized actions -> physical units; dimensions not searched (rotations etc.) stay at 0"""
+    searched = torch.zeros(u.size(-1), dtype=torch.bool, device=u.device)
+    searched[cfg["searched"]] = True
+    a = (u * ctrl.act_std + ctrl.act_mean) * searched
+    if cfg.get("max_norm"):
+        a[..., :3] *= (cfg["max_norm"] / a[..., :3].norm(dim=-1, keepdim=True)).clamp(max=1)
+    return a
+
+
 @torch.no_grad()
 def plan(model, ctrl, emb, latents, goal, cfg, generator=None):
     """CEM in the controller's standardized action space (mean 0, std 1 at the start), searched dimensions only.
     Returns (H, act_dim) actions in physical units."""
     dim = ctrl.act_mean.numel()
-    searched = torch.zeros(dim, dtype=torch.bool, device=goal.device)
-    searched[cfg["searched"]] = True
     mu, sigma = torch.zeros(cfg["horizon"], dim, device=goal.device), torch.ones(cfg["horizon"], dim, device=goal.device)
-
-    def physical(u):
-        a = (u * ctrl.act_std + ctrl.act_mean) * searched  # rotations etc. stay at 0
-        if cfg.get("max_norm"):
-            a[..., :3] *= (cfg["max_norm"] / a[..., :3].norm(dim=-1, keepdim=True)).clamp(max=1)
-        return a
-
     for _ in range(cfg["iterations"]):
         u = mu + sigma * torch.randn(cfg["samples"], cfg["horizon"], dim, generator=generator).to(goal.device)
-        cost = model.get_cost(emb[None], latents[None], goal[None], physical(u)[None], ctrl, cfg["window"])[0]
+        cost = model.get_cost(emb[None], latents[None], goal[None], physical(u, ctrl, cfg)[None], ctrl, cfg["window"])[0]
         elites = u[cost.topk(cfg["elites"], largest=False).indices]
         mu, sigma = elites.mean(0), elites.std(0) + 1e-3
-    return physical(u[cost.argmin()] if cfg["pick"] == "best" else mu)
-
-
-# ---------------------------------------------------------------- offline (Δxyz)
-
-
-def delta_xyz(planned, real):
-    """L1 distance between the summed planned and real translations"""
-    return float(np.abs(np.asarray(planned)[:, :3].sum(0) - np.asarray(real)[:, :3].sum(0)).sum())
-
-
-def offline(cfg):
-    cfg, run_dir, _ = prepare_run(cfg)
-    log = make_logger(run_dir)
-    device, _ = setup(cfg)
-    model, ctrl = load(cfg["controller"], device)
-    p, gen = cfg["planner"], torch.Generator().manual_seed(cfg["seed"])
-    episodes = read_episodes(cfg["data"]["root"], cfg["data"]["split"])
-    starts = [(e, t) for e, ep in enumerate(episodes) for t in range(p["context"] - 1, len(ep["frames"]) - p["horizon"])]
-    results = []
-    for e, t in random.Random(cfg["seed"]).sample(starts, min(cfg["clips"], len(starts))):
-        ep = episodes[e]
-        idx = list(range(t - p["context"] + 1, t + 1)) + [t + p["horizon"]]
-        emb = encode(model, [np.asarray(Image.open(io.BytesIO(ep["frames"][i]))) for i in idx], device)
-        past = torch.tensor(ep["actions"][idx[0] : t], dtype=torch.float32, device=device)
-        latents = context_latents(model, ctrl, emb[:-1], past, p["past_latents"])
-        actions = plan(model, ctrl, emb[:-1], latents, emb[-1], p, gen).cpu()
-        real = ep["actions"][t : t + p["horizon"]]
-        results.append({"video": ep["video"], "t": t, "delta_xyz": delta_xyz(actions, real),
-                        "no_motion": delta_xyz(np.zeros_like(real), real)})
-    summary = {k: float(np.mean([r[k] for r in results])) for k in ("delta_xyz", "no_motion")}
-    json.dump({"summary": summary, "clips": results}, open(run_dir / "results.json", "w"), indent=2)
-    log(f"{len(results)} clips | Δxyz {summary['delta_xyz']:.4f} (no motion {summary['no_motion']:.4f})")
+    return physical(u[cost.argmin()] if cfg["pick"] == "best" else mu, ctrl, cfg)

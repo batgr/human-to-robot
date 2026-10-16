@@ -19,16 +19,23 @@ def train_controller(cfg):
     run(cfg)
 
 
-def evaluate_policies(cfg):
-    from h2r.policy import evaluate
+EVALS = {  # h2r eval <name>: module h2r.eval.<name>, default config, help
+    "pick": ("configs/eval/pick.yaml", "pick success in closed loop, the central measure"),
+    "transfer": ("configs/eval/transfer.yaml", "human-to-robot transfer from pick results (arms A, B, C)"),
+    "prediction": ("configs/eval/diagnostics.yaml", "skill(h) of the world model on robot episodes"),
+    "counterfactual": ("configs/eval/diagnostics.yaml", "different actions, different and coherent predictions?"),
+    "ranking": ("configs/eval/diagnostics.yaml", "planner cost vs real outcome of played sequences"),
+    "interface": ("configs/eval/diagnostics.yaml", "requested vs obtained displacement of the commands"),
+}
 
-    evaluate(cfg)
 
+def evaluation(name):
+    def run(cfg):
+        import importlib  # torch and robosuite load only when evaluating
 
-def plan_offline(cfg):
-    from h2r.plan import offline
+        importlib.import_module(f"h2r.eval.{name}").run(cfg)
 
-    offline(cfg)
+    return run
 
 
 COMMANDS = {
@@ -73,16 +80,11 @@ def main():
     cmd.add_argument("--resume", help="run directory to continue")
     cmd.set_defaults(fn=train_controller)
 
-    sub = groups.add_parser("plan", help="planning evaluations with a trained controller").add_subparsers(
-        dest="command", required=True)
-    cmd = sub.add_parser("offline", help="Δxyz on clips of test episodes")
-    cmd.add_argument("--config", default="configs/planning/offline.yaml")
-    cmd.set_defaults(fn=plan_offline)
-
-    sub = groups.add_parser("policy", help="policies in robosuite").add_subparsers(dest="command", required=True)
-    cmd = sub.add_parser("eval", help="closed loop on collected test episodes")
-    cmd.add_argument("--config", default="configs/policy/robosuite.yaml")
-    cmd.set_defaults(fn=evaluate_policies)
+    sub = groups.add_parser("eval", help="evaluations on robosuite episodes").add_subparsers(dest="command", required=True)
+    for name, (config, help) in EVALS.items():
+        cmd = sub.add_parser(name, help=help)
+        cmd.add_argument("--config", default=config)
+        cmd.set_defaults(fn=evaluation(name))
 
     args = parser.parse_args()
     cfg = yaml.safe_load(open(args.config)) | {"config_path": args.config}

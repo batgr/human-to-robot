@@ -5,7 +5,7 @@ from h2r.models.controller import Controller
 from h2r.models.idm import IDM
 from h2r.models.jepa import JEPA
 from h2r.models.module import ARPredictor
-from h2r.plan import context_latents, delta_xyz, plan
+from h2r.plan import context_latents, plan
 
 N, D, A = 16, 32, 7
 
@@ -82,8 +82,3 @@ def test_cem_norm_bound():
     ctrl = Controller(num_patches=N, dim=D, act_dim=A)
     actions = plan(Quadratic(torch.full((2, A), 5.0)), ctrl, *torch.zeros(3, 1), CFG | {"horizon": 2, "max_norm": 0.1})
     assert (actions[:, :3].norm(dim=-1) <= 0.1 + 1e-6).all()
-
-
-def test_delta_xyz():
-    real = [[0.01, 0.0, 0.0, 0, 0, 0, 0]] * 3
-    assert abs(delta_xyz([[0.0] * 7] * 3, real) - 0.03) < 1e-9 and delta_xyz(real, real) == 0.0

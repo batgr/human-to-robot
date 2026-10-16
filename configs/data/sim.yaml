@@ -1,27 +1,35 @@
 # robosuite episodes: h2r data collect writes raw_dir, then h2r data extract and push as for any video folder.
 
-raw_dir: data/raw/sim/            # <task>/<policy>/episode_<seed>/: <camera>.mp4, state.parquet, sim.parquet
+raw_dir: data/raw/sim/            # <robot>/<task>/<policy>/episode_<seed>/: <camera>.mp4, state.parquet, sim.parquet
 processed_dir: data/h2r-sim/
 
 # collect
+robots: [Panda]                   # robosuite arms, same seeds for each (e.g. [Panda, Sawyer]); UR5e and Jaco need
+                                  # another gripper reading in RobosuiteEnv.robot_state
 tasks:                            # task -> object observation and workspace (world frame) for the policies
   Lift:
     object: cube_pos
     low: [-0.15, -0.15, 0.83]
     high: [0.10, 0.15, 0.95]
+    noise: 0.1                    # scripted: max std of the autoregressive command noise, drawn per episode
+    gain: 2.0                     # scripted: command = gain x the one covering the remaining distance in one step
+    max_hold: 12                  # scripted: steps before moving to the next waypoint anyway
   PickPlaceCan:
     object: Can_pos
     low: [-0.05, -0.40, 0.88]
     high: [0.22, -0.05, 1.02]
+    noise: 0.1
+    gain: 2.0
+    max_hold: 12
 policies: [scripted, random]
-episodes: 500                     # per task and policy; episode k uses seed k
+episodes: 1000                    # per robot, task and policy; episode k uses seed k. Test: 200 scripted episodes,
+                                  # ~120 (Panda) and ~80 (Sawyer) where the cube is lifted, for h2r eval pick
 steps: 40                         # actions per episode (steps + 1 frames)
 frameskip: 5                      # control steps per action: 20 Hz / 5 = 4 actions per second
 cameras: [agentview]              # one video per camera, e.g. [agentview, frontview] (cameras of every task)
 video_crf: 12                     # H.264 quality (lower = closer to lossless)
 
 env:
-  robots: Panda
   has_renderer: false
   has_offscreen_renderer: true
   use_camera_obs: true
@@ -39,7 +47,7 @@ split_by: folder                  # the cameras of an episode stay in the same s
 
 split:
   val: 0.1
-  test: 0.1
+  test: 0.2
   seed: 0
 
 shard_size: 250

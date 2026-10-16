@@ -1,0 +1,35 @@
+# Why a pick succeeds or fails (h2r eval prediction | counterfactual | ranking | interface), on the same held-out test
+# episodes and planner settings as h2r eval pick. Runs go to output_dir/name/<diagnostic>/<time>.
+name: diagnostics
+seed: 0
+controller: outputs/controller/<run>   # trained controller run; its world_model entry gives the world model
+sim_config: configs/data/sim.yaml
+output_dir: outputs
+
+robot: Panda
+task: Lift
+episodes_from: scripted
+camera: agentview
+episodes: 30
+start: 2
+goal: lift
+goal_offset: 10
+subgoals: true                         # ranking: the first goal frame is the pre-grasp one, as for the planner
+horizon: 5                             # predicted steps, and length of the played sequences
+
+stride: 2                              # prediction: one start every stride frames
+counterfactual: {sequences: 8}         # sequences played from the same state (identification chance: 1 / 8)
+ranking: {candidates: 64}              # sequences scored and played from the same state
+interface: {every: 4}                  # one recorded action every 4 frames
+
+planner:                               # as in configs/eval/pick.yaml
+  context: 3
+  past_latents: controller
+  window: 3
+  horizon: 5
+  samples: 300
+  elites: 10
+  iterations: 15
+  searched: [0, 1, 2, 6]
+  max_norm: null
+  pick: best

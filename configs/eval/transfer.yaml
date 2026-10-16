@@ -1,0 +1,11 @@
+# Human-to-robot transfer from h2r eval pick results (h2r eval transfer): one run per (arm, robot episodes, seed),
+# all on the same test initial states. A: robot only, B: SSv2 then robot videos, C: SSv2 frozen.
+name: transfer
+output_dir: outputs
+policy: planner
+reference: A                           # the arm without human video
+bootstrap: 10000
+compute: null                          # optional, reported as is: e.g. {A: 5000 iterations, C: 5000 SSv2 iterations}
+runs:
+  - {arm: A, episodes: 10, seed: 0, path: outputs/pick-A-10-s0/<run>/results.json}
+  - {arm: C, episodes: 10, seed: 0, path: outputs/pick-C-10-s0/<run>/results.json}

@@ -1,4 +1,4 @@
-"""robosuite environment: the collection (h2r data collect) and the policies (h2r policy eval) go through this class"""
+"""robosuite environment: the collection (h2r data collect) and the evaluations (h2r eval) go through this class"""
 
 import numpy as np
 import robosuite as suite
@@ -41,6 +41,16 @@ class RobosuiteEnv:
             controller.update(force=True)
             controller.reset_goal()
         return self.env._get_observations(force_update=True)
+
+    def success(self):
+        """The task's own success test (Lift: cube 4 cm above the table)"""
+        return bool(self.env._check_success())
+
+    def grasped(self):
+        """The gripper holds one of the task's objects (robosuite's contact test)"""
+        objects = [self.env.cube] if hasattr(self.env, "cube") else self.env.objects
+        gripper = self.env.robots[0].gripper
+        return any(self.env._check_grasp(gripper=gripper, object_geoms=o) for o in objects)
 
     def robot_state(self, obs):
         """[x, y, z, roll, pitch, yaw, gripper] in the robot base frame, as DROID's cartesian and gripper positions"""
