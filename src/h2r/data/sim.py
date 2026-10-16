@@ -128,7 +128,7 @@ def collect(cfg):
     raw = Path(cfg["raw_dir"])
     raw.mkdir(parents=True, exist_ok=True)
     shutil.copy(cfg["config_path"], raw / "config.yaml")  # how the episodes were made
-    jobs = [(cfg, robot, name, policy, seed) for robot in cfg["robots"] for name in cfg["tasks"]
+    jobs = [(cfg, robot, name, policy, seed) for robot in cfg["robots"] for name in cfg["collect"]
             for policy in cfg["policies"] for seed in range(cfg["episodes"])]
     with ProcessPoolExecutor(os.cpu_count()) as pool:
         for i, _ in enumerate(pool.map(episode, jobs, chunksize=4)):

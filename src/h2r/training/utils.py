@@ -37,17 +37,16 @@ def git_commit():
 
 
 def prepare_run(cfg):
-    """Full config and run directory: a new run, or the one being resumed (with its own config)"""
-    resume = cfg.pop("resume", None)
-    if resume:
-        run_dir = Path(resume)
+    """Run directory output_dir/name and full config. Returns done = True when the run already has its outputs: a
+    training continues from last.pt with its own config, an evaluation with results.json is not run again"""
+    run_dir = Path(cfg["output_dir"]) / cfg["name"]
+    if (run_dir / "last.pt").exists() or (run_dir / "results.json").exists():
         return yaml.safe_load(open(run_dir / "config.yaml")), run_dir, True
     if isinstance(cfg.get("model"), str):
         cfg["model"] = yaml.safe_load(
             open(cfg["model"])
         )  # the run keeps the full config
-    run_dir = Path(cfg["output_dir"]) / cfg["name"] / time.strftime("%Y%m%d-%H%M%S")
-    run_dir.mkdir(parents=True)
+    run_dir.mkdir(parents=True, exist_ok=True)
     cfg.pop("config_path", None)
     yaml.safe_dump(cfg, open(run_dir / "config.yaml", "w"), sort_keys=False)
     return cfg, run_dir, False

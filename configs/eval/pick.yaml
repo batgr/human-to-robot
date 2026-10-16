@@ -2,7 +2,7 @@
 name: pick
 seed: 0
 policies: [random, replay, planner]    # names in h2r.eval.pick.POLICIES, all run on the same initial states
-controller: outputs/controller/<run>   # planner only: trained controller run; its world_model entry gives the world model
+controller: outputs/controller        # planner only: trained controller run; its world_model entry gives the world model
 sim_config: configs/data/sim.yaml      # raw_dir, env, frameskip and split of the collected episodes
 output_dir: outputs
 

@@ -17,7 +17,10 @@ from h2r.training.utils import make_logger, prepare_run
 
 
 def run(cfg):
-    cfg, run_dir, _ = prepare_run(cfg | {"name": f"{cfg['name']}/interface"})
+    cfg, run_dir, done = prepare_run(cfg | {"name": f"{cfg['name']}/interface"})
+    if done:
+        print(f"already evaluated: {run_dir}")
+        return
     log = make_logger(run_dir)
     sim_cfg = yaml.safe_load(open(cfg["sim_config"]))
     env, cmap = make_env(cfg, sim_cfg), command_map(cfg, sim_cfg)

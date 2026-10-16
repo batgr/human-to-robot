@@ -4,8 +4,8 @@ Arms (same encoder, architecture, robot episodes per budget and evaluation; only
 - A  robot only       IDM + world model trained on the n robot episodes
 - B  human + robot    trained on SSv2, then fine-tuned on the n robot episodes
 - C  human, frozen    trained on SSv2 only
-The controller of every arm is trained on the same n robot episodes. Inputs: h2r eval pick results, one per
-(arm, n, training seed), all on the same test initial states.
+The controller of every arm is trained on the same n robot episodes. Inputs: h2r eval pick runs, one per
+(arm, n, training seed), all on the same test initial states. Computed again at every call, as runs are added.
 
 - success S(n) per arm, 95% interval;
 - gain S_arm(n) - S_A(n), paired: the initial states are resampled together for both arms, the training seeds
@@ -24,7 +24,7 @@ import matplotlib.pyplot as plt
 
 import numpy as np
 
-from h2r.training.utils import make_logger, prepare_run
+from h2r.training.utils import make_logger
 
 
 ARMS = {"A": "A, robot only", "B": "B, human + robot", "C": "C, human frozen"}
@@ -89,9 +89,13 @@ def plot(table, path):
 
 
 def run(cfg):
-    cfg, run_dir, _ = prepare_run(cfg)
+    run_dir = Path(cfg["output_dir"]) / cfg["name"]
+    run_dir.mkdir(parents=True, exist_ok=True)
     log = make_logger(run_dir)
-    success, states = load_successes(cfg["runs"], cfg["policy"])
+    runs = [{"arm": arm, "episodes": n, "seed": seed,
+             "path": str(Path(cfg["output_dir"]) / cfg["pick_runs"].format(arm=arm, n=n, seed=seed) / "results.json")}
+            for arm in cfg["arms"] for n in cfg["budgets"] for seed in cfg["seeds"]]
+    success, states = load_successes(runs, cfg["policy"])
     ref = cfg["reference"]
     table = {}
     for (arm, n), x in sorted(success.items()):

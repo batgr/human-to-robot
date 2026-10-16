@@ -2,7 +2,7 @@
 # episodes and planner settings as h2r eval pick. Runs go to output_dir/name/<diagnostic>/<time>.
 name: diagnostics
 seed: 0
-controller: outputs/controller/<run>   # trained controller run; its world_model entry gives the world model
+controller: outputs/controller        # trained controller run; its world_model entry gives the world model
 sim_config: configs/data/sim.yaml
 output_dir: outputs
 

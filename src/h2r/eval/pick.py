@@ -144,7 +144,10 @@ def filmstrip(frames, goals, title, path, columns=8):
 
 
 def run(cfg):
-    cfg, run_dir, _ = prepare_run(cfg)
+    cfg, run_dir, done = prepare_run(cfg)
+    if done:
+        print(f"already evaluated: {run_dir}")
+        return
     log = make_logger(run_dir)
     device, _ = setup(cfg)
     sim_cfg = yaml.safe_load(open(cfg["sim_config"]))

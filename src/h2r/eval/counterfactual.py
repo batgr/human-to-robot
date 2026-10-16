@@ -34,7 +34,10 @@ def scores(pred, real):
 
 @torch.no_grad()
 def run(cfg):
-    cfg, run_dir, _ = prepare_run(cfg | {"name": f"{cfg['name']}/counterfactual"})
+    cfg, run_dir, done = prepare_run(cfg | {"name": f"{cfg['name']}/counterfactual"})
+    if done:
+        print(f"already evaluated: {run_dir}")
+        return
     log = make_logger(run_dir)
     device, _ = setup(cfg)
     sim_cfg = yaml.safe_load(open(cfg["sim_config"]))

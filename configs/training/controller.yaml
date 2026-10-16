@@ -1,14 +1,14 @@
 name: controller
 seed: 0
 model: configs/models/controller.yaml
-world_model: outputs/h2r/<run>   # trained world model run (config.yaml + best.pt); the controller belongs to it
+world_model: outputs/h2r       # trained world model run (config.yaml + best.pt); the controller belongs to it
 output_dir: outputs
 
 data:
-  root: data/h2r-droid           # episode shards with actions
-  hf_repo: batgre/h2r-droid
+  root: data/h2r-sim/            # episode shards with actions (h2r data collect, then extract)
+  hf_repo: batgre/h2r-sim-v2
   cache: data/cache              # states and IDM targets, encoded once per world model and split
-  include: null                  # fnmatch patterns on video paths, e.g. ["Panda/Lift/*"]; null: every episode
+  include: ["Panda/Lift/*"]      # fnmatch patterns on video paths; null: every episode
   max_videos: null               # data budget: at most this many training episodes (see data.dataset.select)
   seed: 0                        # draws the budget's episodes, as for the world model trained on the same budget
 init_from: null                  # controller run to start from (few-shot transfer, e.g. Panda -> Sawyer)

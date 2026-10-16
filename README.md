@@ -34,8 +34,11 @@ uv run h2r data extract --config configs/data/sim.yaml   # actions: end-effector
 ```bash
 uv run wandb login
 uv run h2r train --config configs/training/world_model.yaml
-uv run h2r train --resume outputs/<name>/<run>
+uv run h2r train --set name=wm-A data.root=data/h2r-sim/ data.max_videos=10   # any config value, nested with dots
 ```
+
+Every command takes `--set key=value ...`. A run goes to `output_dir/name`: running a training again continues it from
+`last.pt` (with its own config), and an evaluation that already wrote `results.json` is not run again.
 
 Training runs a fixed number of iterations, whatever the data budget. The rollout depth K grows during training
 (`rollout_steps`: teacher forcing first, then up to the planning horizon). Validation, every `eval_every` iterations: the
@@ -46,8 +49,7 @@ the best mean skill.
 Controller (real action + current frame -> latent action) for a trained world model, on episodes with actions:
 
 ```bash
-uv run h2r controller train --config configs/training/controller.yaml   # set world_model to the run directory
-uv run h2r controller train --resume outputs/controller/<run>
+uv run h2r controller train --set world_model=outputs/h2r
 ```
 
 Validation: L2 to the IDM's latent action and R² against always predicting the mean one. `init_from` starts from a

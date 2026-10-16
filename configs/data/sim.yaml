@@ -6,6 +6,7 @@ processed_dir: data/h2r-sim/
 # collect
 robots: [Panda]                   # robosuite arms, same seeds for each (e.g. [Panda, Sawyer]); UR5e and Jaco need
                                   # another gripper reading in RobosuiteEnv.robot_state
+collect: [Lift]                   # tasks collected, among those below (e.g. [Lift, PickPlaceCan])
 tasks:                            # task -> object observation and workspace (world frame) for the policies
   Lift:
     object: cube_pos
