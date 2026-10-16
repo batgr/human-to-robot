@@ -2,7 +2,7 @@
 
 Recorded measured actions of the held-out test episodes (one every `every` frames), sent through the command map from
 their recorded state: error between requested and obtained displacement per axis (cm), commands clipped at the OSC
-limit, gripper reaching the requested state. Checks the interface between the controller's actions and the simulator,
+limit, gripper command equal to the demonstration's. Checks the interface between the controller's actions and the simulator,
 independently of any model.
 """
 
@@ -33,7 +33,7 @@ def run(cfg):
             after = env.robot_state(env.step(to_command(want, before, *cmap), sim_cfg["frameskip"])[0])
             err += np.abs((after - before)[:3] - want[:3]) * 100
             saturated += int((np.abs(cmap[0] * want[:3] + cmap[1]) > 1).any())
-            gripper += int((after[6] > 0.5) == (before[6] + want[6] > 0.5))
+            gripper += int(to_command(want, before, *cmap)[6] == ep["sim"][t]["command"][6])
             n += 1
     summary = {"error_cm": (err / n).tolist(), "saturated": saturated / n, "gripper_agrees": gripper / n, "steps": n}
     json.dump(summary, open(run_dir / "results.json", "w"), indent=2)

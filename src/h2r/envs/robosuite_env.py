@@ -11,7 +11,7 @@ class RobosuiteEnv:
         self.env = suite.make(**self.cfg)
 
     def reset(self):
-        return self.env.reset()
+        return self.with_images(self.env.reset())
 
     def step(self, action, repeat=1):
         """Holds the action for repeat control steps (frameskip); returns the last step"""
@@ -19,28 +19,44 @@ class RobosuiteEnv:
             obs, reward, done, info = self.env.step(action)
             if self.cfg.get("has_renderer", False):
                 self.env.render()
-        return obs, reward, done, info
+        return self.with_images(obs), reward, done, info
+
+    def with_images(self, obs):
+        """With use_camera_obs: false, the camera images are rendered here, once per returned observation, instead of
+        by robosuite at every control step (5 renders per frame kept at frameskip 5)"""
+        if self.cfg.get("has_offscreen_renderer") and not self.cfg.get("use_camera_obs", True):
+            for cam in self.cfg["camera_names"]:
+                obs[f"{cam}_image"] = self.env.sim.render(
+                    camera_name=cam, width=self.cfg["camera_widths"], height=self.cfg["camera_heights"])
+        return obs
 
     @staticmethod
     def image(obs, camera):
         return obs[f"{camera}_image"][::-1].copy()  # robosuite renders upside down
 
+    def gripper(self):
+        return next(iter(self.env.robots[0].gripper.values()))
+
     def sim_state(self):
-        return self.env.sim.get_state().flatten()
+        """MuJoCo state, then the gripper's command integrator (robosuite keeps it outside the MuJoCo state)"""
+        return np.r_[self.env.sim.get_state().flatten(), self.gripper().current_action]
 
     def restore(self, sim_state):
         """Puts the simulator back in a recorded state. The controllers cache the robot state and their goal: they are
         refreshed, otherwise the same commands do not replay the same way (1.2 cm apart after one action; refreshed,
-        replays stay within a millimeter). Do not call reset() before: it makes replays drift further.
+        replays stay within a millimeter). Do not call reset() before: it makes replays drift further. The gripper's
+        command integrator is restored too, otherwise the previous episode's gripper target carries over.
         """
-        self.env.sim.set_state_from_flattened(np.asarray(sim_state))
+        n = len(self.env.sim.get_state().flatten())
+        self.env.sim.set_state_from_flattened(np.asarray(sim_state[:n]))
+        self.gripper().current_action = np.array(sim_state[n:], dtype=float)
         self.env.sim.forward()
         for controller in self.env.robots[
             0
         ].composite_controller.part_controllers.values():
             controller.update(force=True)
             controller.reset_goal()
-        return self.env._get_observations(force_update=True)
+        return self.with_images(self.env._get_observations(force_update=True))
 
     def success(self):
         """The task's own success test (Lift: cube 4 cm above the table)"""

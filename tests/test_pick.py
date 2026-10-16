@@ -45,6 +45,11 @@ def test_baselines_in_closed_loop(tmp_path):
     demo = states_to_actions(ep["states"])[ep["t0"] :]
     obs = play(env, ep, demo, fit_command_map([folder]), sim_cfg["frameskip"])[0]
     assert np.linalg.norm(obs["robot0_eef_pos"] - ep["sim"][-1]["eef_world"]) < 0.03
+    env.step(np.r_[np.zeros(6), 1.0], 10)  # the gripper target carries over unless restore puts it back
+    obs = env.restore(ep["sim"][ep["t0"]]["sim_state"])
+    for t in range(ep["t0"], ep["t0"] + 3):
+        obs = env.step(np.asarray(ep["sim"][t]["command"]), sim_cfg["frameskip"])[0]
+    assert abs(env.robot_state(obs)[6] - ep["states"][ep["t0"] + 3, 6]) < 0.02
 
 
 def test_lift_goal_frames():

@@ -10,7 +10,8 @@ robot: Panda
 task: Lift
 episodes_from: scripted                # collected policy whose test episodes give the initial states and goals
 camera: agentview
-episodes: 100                          # test episodes where the object was lifted: Wilson 95% about ±10 points
+episodes: 50                           # test episodes where the object was lifted; paired across arms. Final
+                                       # results: 100 (Wilson 95% about ±10 points)
 start: 2                               # t0: frame the simulator is reset to (earlier frames: planner context)
 goal: lift                             # frame where the object is highest (offset: frame t0 + goal_offset)
 goal_offset: 10
@@ -25,7 +26,7 @@ planner:
   horizon: 5                           # H = rollout_steps.end of the world model
   samples: 300                         # N
   elites: 10                           # K
-  iterations: 15                       # J
+  iterations: 10                       # J (LeWM; Garrido et al.: 15)
   searched: [0, 1, 2, 6]               # Δxyz and gripper; rotations stay at 0
   max_norm: null                       # optional bound on the translation norm (physical units)
   pick: best                           # best sequence (Garrido et al.) or mean (Terver et al.)

@@ -29,7 +29,7 @@ planner:                               # as in configs/eval/pick.yaml
   horizon: 5
   samples: 300
   elites: 10
-  iterations: 15
+  iterations: 10
   searched: [0, 1, 2, 6]
   max_norm: null
   pick: best

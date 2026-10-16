@@ -89,10 +89,13 @@ def command_map(cfg, sim_cfg):
 
 
 def to_command(action, state, gain, offset):
-    """Measured-delta action -> OSC command: translation by the fitted map, no rotation, gripper closes past one half"""
+    """Measured-delta action -> OSC command: translation by the fitted map, no rotation. Gripper: closes or opens in
+    the direction of the closedness change (about ±0.3 per step), otherwise keeps its state: closed above 0.25 (open is
+    about 0, closed on the cube about 0.5, closed empty 1)"""
     command = np.zeros(7)
     command[:3] = np.clip(gain * action[:3] + offset, -1, 1)
-    command[6] = 1.0 if state[6] + action[6] > 0.5 else -1.0
+    close = action[6] > 0 if abs(action[6]) > 0.05 else state[6] > 0.25
+    command[6] = 1.0 if close else -1.0
     return command
 
 
