@@ -127,7 +127,7 @@ The images below compare real future frames (top) with the real dataset frames n
 
 A separate controller maps robot end-effector actions into the IDM's latent-action space. CEM plans sequences in Robosuite, executes the first action, then observes and replans. The planner is given pre-grasp, grasp and lift goal images taken from held-out scripted demonstrations.
 
-**Neither planner lifted the cube in 30 test episodes.** Random actions also scored 0%; replaying recorded demonstration actions succeeded in 73–87% across three evaluations. The learned model is not yet accurate enough under the simulation's action and visual distributions.
+**Neither planner lifted the cube in 30 test episodes.** Random actions also scored 0%; replaying recorded demonstration actions succeeded in 73–87% across three evaluations. Capping each planned step at 2 cm (`planner.max_norm=0.02`) did not change this: 0 of 30 for both models. The learned model is not yet accurate enough under the simulation's action and visual distributions.
 
 ![Example failed pick with the iPhone-video world model](docs/figures/pick-phone-h2-failure.png)
 
