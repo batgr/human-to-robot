@@ -1,298 +1,186 @@
 # Human-to-Robot
 
-**Learning action-conditioned world models from unlabeled manipulation videos**
+**Learning latent actions and visual dynamics from unlabeled manipulation videos.**
 
-This project investigates whether a world model can learn useful action representations and visual dynamics directly from manipulation videos, without ground-truth action labels.
+Can an action-conditioned world model trained on human videos transfer to a robot with a different embodiment? We train an inverse dynamics model (IDM) and a JEPA-style predictor on videos without action labels, then test the learned dynamics on a Panda arm in Robosuite.
 
-We jointly train an inverse dynamics model (IDM) and a JEPA-style world model. The IDM infers latent actions from consecutive visual observations; the world model predicts future representations conditioned on these actions. Multi-step autoregressive training makes the predictor learn from its own predicted states.
+The current models learn some in-domain dynamics but do **not** yet transfer successfully to simulation. This repository includes the data, checkpoints, experiments, and failure cases.
 
-We compare models trained on personally recorded human videos and videos of real robots, focusing on prediction quality, action conditioning, representation collapse, and generalization across domains. Goal-conditioned planning in Robosuite is a downstream experiment, not part of world-model pretraining.
-
-**Artifacts:** [iPhone manipulation videos](https://huggingface.co/datasets/batgre/h2r-phone) · [Real-robot videos](https://huggingface.co/datasets/batgre/h2r-robots-1h30) · [Robosuite episodes](https://huggingface.co/datasets/batgre/h2r-sim-v3) · [Model checkpoints](https://huggingface.co/batgre/h2r-lift)
+**Resources:** [iPhone videos](https://huggingface.co/datasets/batgre/h2r-phone) · [Robot videos](https://huggingface.co/datasets/batgre/h2r-robots-1h30) · [Simulation episodes](https://huggingface.co/datasets/batgre/h2r-sim-v3) · [Checkpoints](https://huggingface.co/batgre/h2r-lift)
 
 ## Run the simulation
 
-Run the **pretrained** human-video world model and its controller in Robosuite (Panda, Lift). No training is required:
+Run the pretrained **human-video** model and controller on five held-out Robosuite Panda Lift episodes. No training is needed.
 
 ```bash
 uv sync
 
-# the world model and controller, then the simulated test episodes (initial states and goal frames)
-uv run hf download batgre/h2r-lift --local-dir outputs --include "wm-phone-h2/*" --include "ctrl-phone-h2/*"
-uv run hf download batgre/h2r-sim-v3 --repo-type dataset --local-dir data/h2r-sim --include "raw/Panda/Lift/scripted/*"
+uv run hf download batgre/h2r-lift --local-dir outputs \
+  --include "wm-phone-h2/*" --include "ctrl-phone-h2/*"
 
-# the planner on 5 test episodes, in a window
-uv run h2r eval pick --set name=demo episodes=5 render=true
+uv run hf download batgre/h2r-sim-v3 --repo-type dataset \
+  --local-dir data/h2r-sim --include "raw/Panda/Lift/scripted/*"
+
+uv run h2r eval pick --set name=demo-phone-h2 \
+  controller=outputs/ctrl-phone-h2 "policies=[planner]" \
+  episodes=5 planner.horizon=2
 ```
 
-For each episode the simulator is restored to a held-out initial state, and the CEM planner runs in closed loop: it executes one robot action, observes the result and plans again. `render=true` shows the camera the world model sees; without it the evaluation runs headless. Results go to `outputs/demo/results.json`, with the frames of a failed episode in `episode_failure.png` (and of a success in `episode_success.png`, if there is one). In the reported runs the planner never lifted the cube.
+Results: `outputs/demo-phone-h2/results.json` and an episode filmstrip (`episode_failure.png` for the first failure; `episode_success.png` only if a pick succeeds). This is a **headless evaluation**, not an interactive GUI or an MP4 recording. The published planners achieved **0/30 successful lifts**.
 
-![Robosuite Lift: the demonstration's actions replayed](docs/figures/pick-replay-success.png)
-![Run 2 planner, human-video world model](docs/figures/pick-phone-h2-failure.png)
+## Model
 
-*Same test episode, from the same initial state. Top: the demonstration's actions replayed, the cube is lifted at step 12 (counted as a success) and dropped later, since the replay is open loop. Bottom: the planner with the human-video world model barely moves the arm. The last three frames of each row are the subgoal and goal frames given to the planner.*
-
-## Architecture
-
-The IDM and predictor are trained jointly on unlabeled video. The visual encoder is frozen.
+The IDM infers what changed between consecutive encoded frames. The predictor uses those latent actions to predict the next visual state.
 
 ```text
-video frames ──> frozen DINOv2-small ──> learned projector ──> visual states sₜ
-                                                           │
-                                    (sₜ, sₜ₊₁) ──> IDM ──> latent action zₜ
-                                                           │
-                        (past visual states, latent actions) ──> predictor ──> ŝₜ₊₁
+video frame ──> frozen DINOv2-small ──> projector ──> state s_t
+                                                   │
+                         (s_t, s_t+1) ──> IDM ──> latent action z_t
+                                                   │
+                       past states + actions ──> predictor ──> next state
 ```
 
-| Component | Implementation | Output |
+| Part | Implementation |
+|---|---|
+| Visual state | Frozen DINOv2-small; learned projector to 16 × 128-D patch tokens |
+| IDM | 2-layer Transformer over two consecutive frames; Gaussian latent action (128-D) |
+| Predictor | 6-layer causal Transformer; AdaLN action conditioning |
+| Rollout | Predict in latent space, then feed predicted states into subsequent steps |
+
+**2.94M trainable parameters**, excluding DINOv2. The IDM and predictor are trained together, using videos only. Neither needs robot actions, pose labels, or object annotations.
+
+Code: [IDM](src/h2r/models/idm.py) · [World model](src/h2r/models/jepa.py) · [Predictor](src/h2r/models/module.py)
+
+## Data
+
+| Source | Contents | Used for |
 |---|---|---|
-| **Visual encoder** | Frozen DINOv2-small; 224 × 224 inputs | Patch features per frame |
-| **Projector** | Two stride-2 convolutions | 4 × 4 tokens, dimension 128 |
-| **IDM** | Two-layer Transformer attending jointly to consecutive frames, learned query, Gaussian readout | One 128-dimensional latent action per transition |
-| **Predictor** | Six-layer causal Transformer conditioned by latent actions through AdaLN | Next-state patch tokens |
-| **Prediction projection** | Learned MLP | Predicted state in the visual latent space |
+| [iPhone videos](https://huggingface.co/datasets/batgre/h2r-phone) | 158 personally recorded manipulation videos, 20.5 min, two camera angles (124 / 14 / 20 train / val / test) | Human-video world model |
+| [Real-robot videos](https://huggingface.co/datasets/batgre/h2r-robots-1h30) | 173 videos selected from six Open-X/LeRobot corpora for Run 2 | Robot-video world model |
+| [Robosuite episodes](https://huggingface.co/datasets/batgre/h2r-sim-v3) | Panda Lift; 1,100 scripted and 1,100 random episodes with states and actions | Controller training and evaluation |
 
-The IDM parameterizes a Gaussian latent action distribution. It samples using reparameterization during training and uses the posterior mean at evaluation. The model has approximately **2.94 million trainable parameters**, excluding the frozen visual encoder.
+Frames are sampled at **4 fps**, resized to **224 × 224**, and split by video. Run 2 matches the number of training frames (4,181 human vs 4,183 robot); clip counts and motion statistics are not identical. The iPhone footage was collected from one person. Audio and location metadata are excluded from the public dataset.
 
-The predictor accepts a history of three observed or predicted visual states and the latent actions connecting them. During autoregressive rollout, each predicted state can become an input to the next step.
-
-Implementation: [`idm.py`](src/h2r/models/idm.py), [`jepa.py`](src/h2r/models/jepa.py), [`module.py`](src/h2r/models/module.py).
+The two world models see **only their respective real-world videos** during pretraining; simulated actions are used later for the controller.
 
 ## Training
 
-Both models learn from **video only**. No joint states, object poses, robot commands, or action labels are used to train the IDM and world model.
-
-The joint objective is:
+We jointly optimize the IDM and predictor with:
 
 ```text
-L = L_teacher_forcing + L_rollout + 0.09 L_SIGReg + 0.001 L_KL
+loss = teacher-forced MSE + rollout MSE + 0.09 × SIGReg + 0.001 × KL
 ```
 
-| Term | Role |
-|---|---|
-| Teacher-forced MSE | Predict the next encoded state from observed context and IDM actions |
-| Rollout MSE | Predict multiple future states using the model's own previous predictions |
-| SIGReg | Discourage collapse of learned visual representations |
-| KL divergence | Regularize the IDM's Gaussian action distribution |
+SIGReg regularizes the visual states; KL regularizes the IDM's Gaussian action distribution. Rollout training starts at one step and increases its horizon during the first half of the run. Predicted-state inputs are detached between rollout steps.
 
-Training starts with one-step prediction and increases the autoregressive rollout length over the first half of training. Predicted-state inputs are detached between rollout steps (truncated backpropagation through time); the inferred actions still receive gradients.
-
-**Experimental settings:** three-frame context, 128 clips per batch, 1,000 optimizer steps, Muon for Transformer matrices and AdamW for the remaining trainable parameters, cosine learning-rate scheduling and a 10% warmup. The checkpoint with the highest mean validation prediction skill is retained.
-
-Two experiments were run:
+Both experiments use a 3-frame context, batch size 128, 1,000 optimizer steps, Muon + AdamW, and cosine scheduling. Checkpoints are selected by mean validation prediction skill.
 
 | | Run 1 | Run 2 |
-|---|---|---|
-| Rollout horizon | 5 steps | 2 steps |
-| Human video | 12.2 min, one camera angle | 20.5 min, two camera angles |
-| Robot video | 102 videos | 173 videos |
-| Training | 1,000 steps | 1,000 steps |
+|---|---:|---:|
+| Prediction horizon | 5 steps | 2 steps |
+| iPhone video | 12.2 min, one angle | 20.5 min, two angles |
+| Real-robot videos | 102 | 173 |
 
-Run 2 uses nearly the same number of sampled training frames for both world models (4,181 human and 4,183 robot), but their scene diversity, motion statistics, and number of usable clips differ. Run 1 and Run 2 also change several factors at once and should not be treated as a controlled ablation.
+Run 1 and Run 2 change several variables at once, so their difference is **not a controlled ablation**.
 
-Implementation: [`world_model.py`](src/h2r/training/world_model.py), [model configuration](configs/models/world_model.yaml).
+Code: [training loop](src/h2r/training/world_model.py) · [model config](configs/models/world_model.yaml)
 
-## Experiments & Results
+## Results
 
-We examine prediction quality, whether the predictor uses latent actions, and how the learned dynamics generalize across human, robot, and simulated-robot observations.
+### 1. Prediction on held-out videos
 
-### Prediction on held-out videos
+We report `skill(h) = 1 - prediction_MSE / persistence_MSE`, where persistence repeats the last observed latent state. **Positive skill** means the prediction beats persistence.
 
-Prediction skill compares the multi-step MSE against a persistence baseline that repeats the last observed state:
+The future actions used in this diagnostic are **inferred by the IDM from real frame pairs**, including future observations. This measures prediction conditioned on inferred actions, not autonomous action selection.
 
-```text
-skill(h) = 1 - MSE(predicted state at t+h, true state at t+h)
-               / MSE(last context state, true state at t+h)
-```
-
-**Positive skill** means better prediction than persistence. This evaluation uses latent actions inferred by the IDM from real future frame pairs (oracle actions). It measures the predictor and inferred-action representation, **not** the ability to choose future actions independently.
-
-Results below are computed on each model's own held-out video split, at its selected checkpoint:
-
-| Model | Horizon | Skill (step 1 / final step) | Controllability | Active IDM dimensions / 128 |
+| World model | Horizon | Skill: step 1 / final | Action sensitivity | Active IDM dimensions |
 |---|---:|---:|---:|---:|
-| Run 1, human | 5 | -0.07 / 0.15 | 0.26 | 127 |
-| Run 1, robot | 5 | -0.66 / -0.64 | 0.06 | 74 |
-| Run 2, human | 2 | **0.17 / 0.29** | **0.40** | 89 |
-| Run 2, robot | 2 | -0.49 / -0.52 | 0.09 | 71 |
+| Run 1 · iPhone | 5 | -0.07 / 0.15 | 0.26 | 127 / 128 |
+| Run 1 · robot | 5 | -0.66 / -0.64 | 0.06 | 74 / 128 |
+| Run 2 · iPhone | 2 | **0.17 / 0.29** | **0.40** | 89 / 128 |
+| Run 2 · robot | 2 | -0.49 / -0.52 | 0.09 | 71 / 128 |
 
-In Run 2, the human-video model outperforms persistence on its held-out videos, while the robot-video model does not. Their absolute one-step validation MSE values are similar (0.152 and 0.154), but these losses are measured on different datasets and model-specific representation spaces. Persistence is harder to beat on robot videos with little frame-to-frame motion. Skill values across these datasets therefore do not provide a direct model-quality ranking.
+Action sensitivity compares error with correct versus shuffled IDM actions. The robot-video predictor depends much less on its actions, and its IDM shows partial action collapse. A high sensitivity score **does not** mean latent actions are physically meaningful.
 
-**Run 2 training curves.** The human-video model improves its validation prediction skill as the rollout horizon increases from one to two steps.
+Persistence is harder to beat on videos with little movement. Values measured on different datasets and model-specific latent spaces are therefore not a direct comparison of absolute prediction quality.
 
-![Run 2: training and validation curves for the world model trained on iPhone videos](docs/figures/curves-wm-phone-h2.png)
+Training curves: [iPhone model](docs/figures/curves-wm-phone-h2.png) · [robot model](docs/figures/curves-wm-robots-h2.png)
 
-### Does the predictor use the latent action?
+### 2. Transfer to other video domains
 
-A predictor may reduce its loss while ignoring the action input. We measure **controllability** by comparing teacher-forced prediction error with the correct IDM actions against error after shuffling actions across clips. A value near zero indicates little sensitivity to this intervention.
+Run 2 models are evaluated without fine-tuning. Each entry is skill at step 1 / step 2, using IDM-inferred future actions.
 
-At the selected Run 2 checkpoints, controllability is **0.40** on human videos and **0.09** on robot videos. The robot-video IDM also shows partial action collapse during training: its active action dimensions drop to zero early in Run 2 and recover only partially.
-
-Action sensitivity is necessary but insufficient evidence of useful control. It does not establish that individual latent dimensions have stable physical meanings.
-
-**Robot-video model training curves.** Compare the validation skill, controllability, and active IDM dimensions with the human-video run above.
-
-![Run 2: training and validation curves for the real-robot-video world model](docs/figures/curves-wm-robots-h2.png)
-
-### Cross-domain generalization
-
-Each Run 2 model is evaluated without fine-tuning on held-out human videos, real-robot videos, and Robosuite observations.
-
-| World model trained on | Human test videos | Real-robot test videos | Robosuite |
-|---|---|---|---|
-| Human | 0.17 / 0.29 | -1.89 / -2.49 | -2.14 / -2.45 |
+| Trained on | iPhone validation | Robot validation | Robosuite |
+|---|---:|---:|---:|
+| iPhone | 0.17 / 0.29 | -1.89 / -2.49 | -2.14 / -2.45 |
 | Robot | -0.78 / -1.03 | -0.49 / -0.52 | -2.31 / -2.49 |
 
-*Entries are prediction skill at steps 1 / 2, using IDM-inferred actions.*
+**Neither model beats persistence in Robosuite.** The learned dynamics remain strongly tied to the training domain.
 
-Neither model outperforms persistence on simulated robot observations. Controllability also drops substantially when the video domain changes. The gap between in-domain prediction and cross-domain transfer remains the main limitation.
+The images below compare real future frames (top) with the real dataset frames nearest to the *predicted latent states* (bottom). They are **nearest-neighbor visualizations**, not decoded model outputs.
 
-**Qualitative predictions in Robosuite.** The top row shows real future frames; the bottom row shows the real frames nearest to the model's *predicted latent states*. These are nearest-neighbor visualizations, **not images decoded by the world model**, and they illustrate individual examples rather than aggregate performance.
-
-| Human-video world model | Robot-video world model |
+| Trained on iPhone videos | Trained on robot videos |
 |:---:|:---:|
-| ![Real and nearest-neighbor predicted frames for the human-video model](docs/figures/imagined-phone-h2.png) | ![Real and nearest-neighbor predicted frames for the robot-video model](docs/figures/imagined-robots-h2.png) |
+| ![Real vs nearest predicted frames: iPhone-trained WM](docs/figures/imagined-phone-h2.png) | ![Real vs nearest predicted frames: robot-trained WM](docs/figures/imagined-robots-h2.png) |
 
-## Data and checkpoints
+### 3. Downstream simulation
 
-### Video datasets
+A separate controller maps robot end-effector actions into the IDM's latent-action space. CEM plans sequences in Robosuite, executes the first action, then observes and replans. The planner is given pre-grasp, grasp and lift goal images taken from held-out scripted demonstrations.
 
-| | Videos (train / val / test) | Content |
+**Neither planner lifted the cube in 30 test episodes.** Random actions also scored 0%; replaying recorded demonstration actions succeeded in 73–87% across three evaluations. The learned model is not yet accurate enough under the simulation's action and visual distributions.
+
+![Example failed pick with the iPhone-video world model](docs/figures/pick-phone-h2-failure.png)
+
+[See the robot-video model's failure](docs/figures/pick-robots-h2-failure.png).
+
+## Checkpoints
+
+[All checkpoints and configs on Hugging Face](https://huggingface.co/batgre/h2r-lift).
+
+| Model | Human / iPhone | Real robot |
 |---|---|---|
-| **iPhone recordings** ([browse videos on Hugging Face](https://huggingface.co/datasets/batgre/h2r-phone)) | 124 / 14 / 20, 20.5 min | Unlabeled, real human object manipulation, personally recorded on an iPhone |
-| **Real-robot videos** ([browse on Hugging Face](https://huggingface.co/datasets/batgre/h2r-robots-1h30)) | 173 of 712 used for training | Real robot demonstrations from six Open-X datasets (LeRobot): DROID, Berkeley UR5, Jaco Play, TACO Play, Stanford Kuka, RoboTurk |
-| **Simulated robot episodes** ([browse on Hugging Face](https://huggingface.co/datasets/batgre/h2r-sim-v3)) | 1,100 scripted + 1,100 random episodes, split 70 / 10 / 20 (61,680 / 8,400 transitions for the controllers) | Robosuite Panda Lift, `agentview`, 40 actions per episode, with actions |
+| World model · H=5 | [wm-phone](https://huggingface.co/batgre/h2r-lift/tree/main/wm-phone) | [wm-robots](https://huggingface.co/batgre/h2r-lift/tree/main/wm-robots) |
+| World model · H=2 | [wm-phone-h2](https://huggingface.co/batgre/h2r-lift/tree/main/wm-phone-h2) | [wm-robots-h2](https://huggingface.co/batgre/h2r-lift/tree/main/wm-robots-h2) |
+| Controller · H=2 | [ctrl-phone-h2](https://huggingface.co/batgre/h2r-lift/tree/main/ctrl-phone-h2) | [ctrl-robots-h2](https://huggingface.co/batgre/h2r-lift/tree/main/ctrl-robots-h2) |
 
-The world models only see the human or the robot videos. The simulation is only used for the controllers and the
-evaluation. All videos are sampled at 4 fps and 224 px and split by video.
+## Reproduce training
 
-Phone videos were recorded from two camera angles: the first 81
-videos (65 / 6 / 10) from one angle, the next 77 (59 / 8 / 10) from another. Location metadata and audio are removed before upload.
-
-### Trained models
-
-All released checkpoints and their configs are hosted at **[batgre/h2r-lift](https://huggingface.co/batgre/h2r-lift)** on Hugging Face.
-
-| Training videos | World model + IDM | Downstream controller |
-|---|---|---|
-| Human / iPhone — Run 1 (H=5) | [wm-phone](https://huggingface.co/batgre/h2r-lift/tree/main/wm-phone) | [ctrl-phone](https://huggingface.co/batgre/h2r-lift/tree/main/ctrl-phone) |
-| Real robot — Run 1 (H=5) | [wm-robots](https://huggingface.co/batgre/h2r-lift/tree/main/wm-robots) | [ctrl-robots](https://huggingface.co/batgre/h2r-lift/tree/main/ctrl-robots) |
-| Human / iPhone — Run 2 (H=2) | [wm-phone-h2](https://huggingface.co/batgre/h2r-lift/tree/main/wm-phone-h2) | [ctrl-phone-h2](https://huggingface.co/batgre/h2r-lift/tree/main/ctrl-phone-h2) |
-| Real robot — Run 2 (H=2) | [wm-robots-h2](https://huggingface.co/batgre/h2r-lift/tree/main/wm-robots-h2) | [ctrl-robots-h2](https://huggingface.co/batgre/h2r-lift/tree/main/ctrl-robots-h2) |
-
-## Downstream control
-
-We freeze each world model and train a small controller on Robosuite transitions to predict the IDM latent action from the robot's measured end-effector action and current visual state. CEM then searches over candidate robot actions, rolls them out through the controller and world model, executes the first action, and replans after observing the result.
-
-This is an experimental test of whether learned visual dynamics are usable for action selection. In both runs, **neither planner lifted the cube successfully in 30 held-out Robosuite Lift episodes**. The demonstration-replay baseline succeeds in 73–87% of trials across three repeated evaluations, while random control succeeds in none. The planner receives pre-grasp, grasp, and lift goal frames extracted from the test demonstration; these subgoals are supplied, not discovered.
-
-Thus the current results support limited in-domain learning of action-conditioned visual dynamics, **not successful human-to-robot transfer**.
-
-**Example failure (Run 2), robot-video world model**, on the same test episode as above: the arm moves a lot, goes down next to the cube and wanders around it. Each filmstrip shows the executed episode followed by the given subgoals and goal.
-
-![Run 2: failed Robosuite Lift episode using the model trained on real-robot videos](docs/figures/pick-robots-h2-failure.png)
-
-Run 1, same episode: [human-video model](docs/figures/pick-phone-failure.png) (the arm rises out of view), [robot-video model](docs/figures/pick-robots-failure.png) (the arm goes over the cube and down without grasping it).
-
-### Why the planner fails
-
-Diagnostics on 10 held-out Robosuite episodes ([`src/h2r/eval/`](src/h2r/eval)) locate four problems, from the world model to the task. "IDM" uses latent actions inferred from the real frames; "controller" uses the latent actions the controller gives for the commands played, which is what the planner scores.
-
-| Run 2 | Human-video model | Robot-video model |
-|---|---:|---:|
-| Skill at step 1, IDM / controller | -3.48 / -3.51 | -3.98 / -4.06 |
-| Counterfactual direction, IDM / controller | 0.22 / -0.01 | 0.22 / 0.15 |
-| Ranking: Spearman cost vs real outcome / regret | 0.79 / 2.1 cm | 0.74 / 2.6 cm |
-| Offline planning Δxyz, planner / no motion | 10.9 / 2.8 cm | 33.3 / 2.8 cm |
-| Same, each step capped at 2 cm | 4.6 / 2.8 cm | 5.3 / 2.8 cm |
-
-*Counterfactual direction: cosine between predicted and real differences of outcomes when several command sequences are played from one state. Offline planning follows Garrido et al.: 64 random clips of 30 test episodes, the real frame H steps ahead as goal, no simulator; Δxyz is the L1 distance between the summed planned and recorded displacements.*
-
-1. **The world models do not predict the simulation.** Every model predicts Robosuite frames worse than persistence, with the IDM's own latent actions too. None saw a simulated frame in training.
-2. **The command is lost before the prediction.** With the IDM's latent actions, predicted outcomes follow the commands a little (direction 0.22 for both). Through the controller, the human-video model's no longer do (-0.01); the robot-video model's keep most of it (0.15). The run 2 human-video controller is also the weakest (validation R² 0.51, against 0.72 for the robot-video one).
-3. **The planner asks for displacements far larger than the demonstrations.** The controller's action space is standardized (about 2 cm per axis and step), and CEM picks sequences far outside it: every planner is worse than not moving, by 8 to 31 cm in run 2 and by about 33 to 35 cm in run 1 (H = 5). Capping each step at 2 cm divides the error by 2 to 6, but the planned displacement is closer to the recorded one than no motion on only 19% (human) and 12% (robot) of the clips.
-4. **The task is longer than the planner's horizon.** The lift is about 30 steps from the start and the planner looks 2 steps ahead, through the given subgoals. A good ranking over 2 steps does not add up to a pick over 38.
-
-The interface is not the cause: replaying the demonstration's measured actions through the same command map succeeds in 73–87% of episodes. The papers this work follows do not test a closed-loop pick from latent actions either: Garrido et al. evaluate planning offline with a goal 3 steps away, and Terver et al. report low success on picking even with world models trained on real actions.
-
-### What did not work
-
-- **Horizon 5 (Run 1).** Both planners picked 0 of 30 cubes; the human-video planner never came within 3 cm of the cube. Horizon 2 improved prediction and offline planning, and still picked none.
-- **Robot videos as a source.** 173 videos from 6 datasets with different robots, cameras and scenes: the model never beats persistence on its own held-out videos, overfits after step 650 of 1,000 (validation error rises while training error falls), and its latent action collapsed early in Run 2. Little moves between two frames of these videos; whether this lets the KL term switch the latent action off was not tested.
-- **An unconstrained planner** (point 3 above).
-- **Diagnostics that do not predict the pick.** In Run 1 the robot-video model had the best controller (R² 0.79) and the best ranking (Spearman 0.75), and picked no cube. A positive skill on the human videos (Run 2) did not transfer to Robosuite.
-- **Run 1 to Run 2 on the human side.** More and more varied video (12.2 to 20.5 min, a second camera angle) together with the shorter horizon improved the world model: in-domain skill -0.07 to 0.17 at step 1, Robosuite skill -3.29 to -2.14, controllability 0.26 to 0.40, offline Δxyz 38.2 to 10.9 cm. Its controller got worse (R² 0.60 to 0.51, counterfactual direction 0.15 to -0.01). The changes were made together, so no gain is attributed to one of them.
-
-## Reproduce
-
-The configs in `configs/` hold the Run 2 settings, with the human videos as the default. `lift.ipynb` runs every step on Colab, in order.
+The [Colab notebook](lift.ipynb) runs data preparation, training and evaluation. To repeat the Run 2 world-model experiments:
 
 ```bash
 uv sync
-uv run hf auth login && uv run wandb login     # ffmpeg is also needed (brew install ffmpeg on macOS)
 
-# human videos, pinned to the Run 2 version (robot videos and simulated episodes download on first use)
-uv run hf download batgre/h2r-phone --repo-type dataset --local-dir data/h2r-phone \
-  --revision 815bfb769aa6fc2059fe746381473915a2fb665d --exclude "raw/*"
+uv run hf download batgre/h2r-phone --repo-type dataset \
+  --revision 815bfb769aa6fc2059fe746381473915a2fb665d \
+  --local-dir data/h2r-phone --exclude "raw/*"
 
-# world models: 1,000 steps on video only
-uv run h2r train                                                        # human videos -> outputs/wm-phone-h2
-uv run h2r train --set name=wm-robots-h2 data.max_videos=173 \
-  data.root=data/h2r-robots-1h30/ data.hf_repo=batgre/h2r-robots-1h30   # robot videos -> outputs/wm-robots-h2
+uv run hf download batgre/h2r-robots-1h30 --repo-type dataset \
+  --local-dir data/h2r-robots-1h30
 
-# controllers: 4,000 steps on the simulated episodes, world model frozen
-uv run h2r controller train                                             # -> outputs/ctrl-phone-h2
-uv run h2r controller train --set name=ctrl-robots-h2 world_model=outputs/wm-robots-h2
+H="rollout_steps.end=2 val_horizon=2 iterations=1000 eval_every=50"
+uv run h2r train --set name=wm-phone-h2 \
+  data.root=data/h2r-phone data.hf_repo=batgre/h2r-phone $H
 
-# pick success on 30 test episodes
-uv run h2r eval pick --set name=pick-baselines "policies=[random, replay]"
-uv run h2r eval pick --set name=pick-phone-h2
-uv run h2r eval pick --set name=pick-robots-h2 controller=outputs/ctrl-robots-h2
-
-# diagnostics on 10 test episodes (offline planning in the tables: episodes=30)
-for d in prediction counterfactual ranking interface planning; do
-  uv run h2r eval $d --set name=diag-phone-h2
-done
+uv run h2r train --set name=wm-robots-h2 \
+  data.root=data/h2r-robots-1h30 \
+  data.hf_repo=batgre/h2r-robots-1h30 data.max_videos=173 $H
 ```
 
-A run goes to `outputs/<name>`. Every command takes `--set key=value ...` to change a setting of its config (nested keys with dots) and `--config` to use another config. Running a training again continues it from `last.pt`; an evaluation that already wrote `results.json` is skipped. Run 1: `rollout_steps.end=5 val_horizon=5` for the world models, `planner.horizon=5` for the evaluations (and `horizon=5` for the diagnostics), the human videos at revision `668913068cc77e2cb195a8b3a88a4d87fd317fb1` and `data.max_videos=102` for the robot videos. `h2r data extract`, `h2r data collect` and `h2r data push` rebuild the datasets (`configs/data/`). Tests: `uv run pytest`.
+Use `uv run h2r controller train` to fit the downstream action controller. Evaluation and data commands are listed in `uv run h2r --help`, and their configs are in [`configs/`](configs/). Run outputs include checkpoints, metrics and the resolved configuration. Tests: `uv run pytest`.
 
-## Experimental setup and limitations
+## Limitations
 
-- **Matched world-model budget.** Run 2 uses the same architecture, training steps and approximately the same number of sampled frames for human and robot videos, but not identical motion statistics, video lengths or numbers of clips.
-- **Separate training stages.** The simulation is used to fit the downstream action controller and to evaluate control, not to train either video-only world model.
-- **Oracle-action prediction metrics.** Validation rollouts use IDM actions inferred from observed future pairs. A high score does not imply that the system can select correct future actions.
-- **Data scale.** 20.5 min of human video (4,181 training frames); the world model sees 128,000 clips of 5 frames (1,000 steps of 128). Garrido et al., whose latent action model this follows, train on YouTube-Temporal-1B for 30,000 steps of 1,024 clips of 16 frames (about 240 times more clips) with a ViT-L predictor; ours has 2.9 M trainable parameters. At the selected checkpoints the one-step validation error is 1.7 times the training error for the human-video model and 2.0 times for the robot-video model: both fit their few videos more than they generalize from them.
-- **Viewpoints.** The human videos come from two camera angles of one person in one room; Robosuite is seen from a third, and the robot videos from many others.
-- **Limited statistical evidence.** One training seed per world model, 30 held-out simulation episodes (0% success has a Wilson 95% interval of 0–11%), 10 episodes for the diagnostics. Replaying the same actions changes the outcome of 3 or 4 of the 30 episodes from one run to the next.
-- **Not an ablation.** Run 1 and Run 2 vary the data amount, viewpoints and prediction horizon together.
-- **Domain shift.** Neither world model predicts Robosuite dynamics better than persistence; the downstream pick policies fail.
+- Only **20.5 minutes of personally recorded videos** from one person, with two camera angles.
+- One training seed per model; downstream results use 30 held-out simulation episodes.
+- Evaluation prediction actions are inferred from future frames and are not directly usable by a robot.
+- Run 1 vs Run 2 changes multiple factors together.
+- Domain shift and weak action conditioning prevent successful robot control in the current experiments.
 
-## Next steps
+## References and credits
 
-Suggested by the results, not tested:
+Parts of [`jepa.py`](src/h2r/models/jepa.py) and [`module.py`](src/h2r/models/module.py) are adapted from [LeWorldModel](https://github.com/lucas-maes/le-wm), MIT license ([license copy](LICENSES/LeWM-MIT.txt)). The IDM and related training choices follow Garrido et al.
 
-- **Some in-domain video.** No world model saw a simulated frame and none beats persistence on Robosuite. Garrido et al. (Table S3) find that mixing 10% of in-domain robot video into in-the-wild pretraining lowers their planning error (Δxyz) from 0.14 to 0.09 with noisy latent actions, and to 0.06 with more of it, against 0.05 for a model trained with real actions. The 2,200 simulated episodes already have videos.
-- **More and more varied human video.** The only data change between runs (more minutes, a second angle) came with better prediction on every split, and the train–validation gap is large. A camera closer to Robosuite's view is worth testing: Terver et al. had to match the simulator's camera to DROID's for their models to unroll.
-- **The KL weight per dataset.** One value (1e-3) was used for both video sources and the robot-video latent action collapsed. Garrido et al. find that neither the most nor the least constrained latent action works best.
-- **Fix the controller of the human-video model.** Its latent actions carry the command's direction with the IDM (0.22) but not through the controller (-0.01).
-- **A bounded planner in closed loop.** The 2 cm cap helps offline; Garrido et al. also use 15 CEM iterations against our 10.
-- **Shorter tasks first.** Reaching the cube, then grasping, before the full pick.
-- **An action-conditioned baseline.** A world model trained on the simulated episodes with their actions would tell whether the gap comes from the videos or from learning actions from video.
-
-## References and acknowledgments
-
-`src/h2r/models/jepa.py` and `src/h2r/models/module.py` are adapted from
-[LeWorldModel](https://github.com/lucas-maes/le-wm) (Copyright (c) 2026 Lucas Maes), released under the MIT
-license, in [`LICENSES/LeWM-MIT.txt`](LICENSES/LeWM-MIT.txt). The IDM, the controller and the training values follow
-Garrido et al. 2026.
-
-- Lucas Maes, Quentin Le Lidec, Damien Scieur, Yann LeCun, Randall Balestriero. _LeWorldModel: Stable End-to-End
-  Joint-Embedding Predictive Architecture from Pixels._ arXiv:2603.19312, 2026.
-- Quentin Garrido, Tushar Nagarajan, Basile Terver, Nicolas Ballas, Yann LeCun, Michael Rabbat. _Learning Latent
-  Action World Models In The Wild._ arXiv:2601.05230, 2026.
-- Basile Terver et al. _What Drives Success in Physical Planning with Joint-Embedding Predictive World Models?_
-  TMLR, 2026.
-- Maxime Oquab et al. _DINOv2: Learning Robust Visual Features without Supervision._ TMLR, 2024.
-- Open X-Embodiment Collaboration. _Open X-Embodiment: Robotic Learning Datasets and RT-X Models._ 2023.
-- Yuke Zhu et al. _robosuite: A Modular Simulation Framework and Benchmark for Robot Learning._ 2020.
+- Maes et al., [*LeWorldModel: Stable End-to-End Joint-Embedding Predictive Architecture from Pixels*](https://arxiv.org/abs/2603.19312), 2026.
+- Garrido et al., [*Learning Latent Action World Models in the Wild*](https://arxiv.org/abs/2601.05230), 2026.
+- Oquab et al., *DINOv2: Learning Robust Visual Features without Supervision*, 2024.
+- Terver et al., *What Drives Success in Physical Planning with Joint-Embedding Predictive World Models?*, 2026.
