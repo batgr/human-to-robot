@@ -10,6 +10,36 @@ We compare models trained on personally recorded human videos and videos of real
 
 **Artifacts:** [iPhone manipulation videos](https://huggingface.co/datasets/batgre/h2r-phone) · [Real-robot videos](https://huggingface.co/datasets/batgre/h2r-robots-1h30) · [Robosuite episodes](https://huggingface.co/datasets/batgre/h2r-sim-v3) · [Model checkpoints](https://huggingface.co/batgre/h2r-lift)
 
+## Run the simulation
+
+Run the **pretrained** human-video world model and controller in Robosuite Panda Lift. No training is required. From the repository root:
+
+```bash
+uv sync
+
+uv run hf download batgre/h2r-lift \
+  --local-dir outputs \
+  --include "wm-phone-h2/*" \
+  --include "ctrl-phone-h2/*"
+
+uv run hf download batgre/h2r-sim-v3 \
+  --repo-type dataset \
+  --local-dir data/h2r-sim \
+  --include "raw/Panda/Lift/scripted/*"
+
+uv run h2r eval pick --set \
+  name=demo-phone-h2 \
+  controller=outputs/ctrl-phone-h2 \
+  "policies=[planner]" \
+  episodes=5 \
+  planner.horizon=2
+```
+
+The simulator restores five held-out initial states and runs the CEM planner in closed loop: execute one robot action, observe the result, and replan. Results are written to `outputs/demo-phone-h2/results.json`; a filmstrip of an unsuccessful episode is saved as `outputs/demo-phone-h2/episode_failure.png`. A success filmstrip is only saved if an episode succeeds.
+
+This is a **headless evaluation** that saves images and metrics, not a live GUI or MP4 video. In the reported runs, the planner did not successfully lift the cube.
+
+
 ## Architecture
 
 The IDM and predictor are trained jointly on unlabeled video. The visual encoder is frozen.
@@ -210,15 +240,7 @@ uv sync
 uv run hf auth login && uv run wandb login     # ffmpeg is also needed (brew install ffmpeg on macOS)
 ```
 
-**Optional: run the trained planner** on 5 test states:
-
-```bash
-uv run hf download batgre/h2r-lift --local-dir outputs --include "wm-phone-h2/*" --include "ctrl-phone-h2/*"
-uv run hf download batgre/h2r-sim-v3 --repo-type dataset --local-dir data/h2r-sim --include "raw/Panda/Lift/scripted/*"
-uv run h2r eval pick --set name=try controller=outputs/ctrl-phone-h2 "policies=[planner]" episodes=5 planner.horizon=2
-```
-
-Results are saved in `outputs/try/results.json`. If the policy produces an unsuccessful episode, its frames are saved as `episode_failure.png`; `episode_success.png` is produced only when a successful episode is observed.
+The pretrained simulation example is provided in [Run the simulation](#run-the-simulation) above.
 
 **Train again** (data, world models, controllers, pick):
 
