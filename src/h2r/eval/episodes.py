@@ -38,8 +38,8 @@ def goal_frames(states, sim, cfg):
         return None
     if not cfg.get("subgoals"):
         return [top]
-    # The first closing motion marks pre-grasp; the first subsequent near-zero
-    # gripper change marks grasp. Fall back to the lift frame if none is found.
+    # Use the first closing motion as pre-grasp and its first subsequent
+    # near-zero gripper change as grasp. If no closing starts, use the lift frame.
     gripper_changes = np.diff(states[:, 6])
     closing = np.flatnonzero(gripper_changes > 0.05)
     pre_grasp = int(closing[0]) if len(closing) else top
