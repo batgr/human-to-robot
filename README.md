@@ -135,34 +135,31 @@ A separate controller maps robot end-effector actions into the IDM's latent-acti
 
 ## Analysis
 
-**Where the pipeline breaks.** We ran diagnostics on held-out Robosuite episodes for the Run 2 models. Each diagnostic checks one link of the chain, from prediction to action ([`src/h2r/eval/`](src/h2r/eval)):
+**Where the pipeline breaks.** Diagnostics on held-out Robosuite episodes, Run 2 ([`src/h2r/eval/`](src/h2r/eval)):
 
-| Run 2 | iPhone WM | Robot WM |
+| | iPhone WM | Robot WM |
 |---|---:|---:|
-| Prediction skill in Robosuite, step 1 | -3.48 | -3.98 |
-| Prediction follows the command: with IDM actions / through the controller | 0.22 / -0.01 | 0.22 / 0.15 |
+| Prediction follows the command: IDM actions / through the controller | 0.22 / -0.01 | 0.22 / 0.15 |
 | Offline planning error Δxyz: planner / no motion | 10.9 / 2.8 cm | 33.3 / 2.8 cm |
 | Same, steps capped at 2 cm | 4.6 / 2.8 cm | 5.3 / 2.8 cm |
 
-*"Follows the command": cosine between predicted and real differences of outcomes for several command sequences played from the same state; 0 means unrelated. Offline planning follows Garrido et al.: 64 clips, the real frame 2 steps ahead as the goal, and the L1 error between planned and recorded displacement.*
+*Follows the command: cosine between predicted and real differences of outcomes for command sequences played from the same state (0: unrelated). Offline planning follows Garrido et al.: 64 clips, goal 2 steps ahead, L1 error of the summed displacement.*
 
-1. **Prediction.** Neither model has seen a simulated frame, and both predict Robosuite frames worse than repeating the last one.
-2. **Control.** The iPhone model's predictions respond to the command when the IDM gives the latent actions. Through the controller they no longer do, so the robot action's effect is lost in the controller. The robot model's controller keeps part of it.
-3. **Planning.** Every planner does worse than not moving: CEM picks displacements much larger than in the demonstrations. A 2 cm cap per step reduces the error but does not fix it.
-4. **Task length.** The lift is about 30 steps away; the planner looks 2 steps ahead, guided by subgoals.
+- **Controller.** The iPhone model responds to the command through the IDM's latent actions but not through the controller: the robot action's effect is lost there.
+- **Planner.** CEM picks displacements far larger than the demonstrations' and does worse than not moving, even with the 2 cm cap.
+- **Task length.** The lift is about 30 steps away; the planner sees 2.
+- The replay baseline rules out the action interface.
 
-The action interface is not the cause: replaying the recorded actions through the same pipeline lifts the cube in 73–87% of episodes.
-
-**What the two runs suggest.**
-- **Data is the main limit.** Going from 12.2 to 20.5 min of iPhone video and adding a second camera angle came with better prediction on every split. The horizon also changed (5 to 2 steps), so this is not a controlled ablation. The one-step validation error is 1.7× the training error for the iPhone model and 2.0× for the robot model, so both models overfit their few videos. For scale, Garrido et al. train on YouTube-Temporal-1B with about 240× more clips and a ViT-L predictor.
-- **More robot video is not automatically better.** The 173 robot videos come from 6 datasets with different robots, cameras and scenes. That model never beats persistence on its own videos, overfits after step 650 and its latent action partly collapsed.
-- **Good offline diagnostics did not predict a pick.** The Run 1 robot model had the best controller and ranking scores and still picked no cube.
+**What the runs suggest.**
+- **Data is the main limit.** The extra video of Run 2 came with better prediction on every split. The one-step validation error is still 1.7× the training error for the iPhone model and 2.0× for the robot model. Garrido et al. train on about 240× more clips, with a ViT-L predictor.
+- **Varied robot video is not a shortcut.** Mixing 6 robots, cameras and scenes, the robot model overfits after step 650 of 1,000.
+- **Offline diagnostics did not predict a pick.** The Run 1 robot model had the best controller and ranking scores and picked no cube.
 
 **Next steps**, in order of expected impact:
 1. **Much more human video.** Something-Something v2 (220k clips of hands manipulating objects), then Ego4D.
-2. **A little in-domain video.** Garrido et al. (Table S3) show that 10% in-domain data cuts their planning error from 0.14 to 0.09. Our simulated episodes already have videos.
-3. **Fix the controller–planner link.** Retrain the iPhone model's controller, bound the action search, and test reaching before the full pick.
-4. **An action-labelled baseline.** A world model trained on the simulated episodes with their real actions would show how much of the gap comes from learning actions from video.
+2. **A little in-domain video.** Garrido et al. (Table S3) cut their planning error from 0.14 to 0.09 with 10% in-domain data; our simulated episodes already have videos.
+3. **Fix the controller–planner link.** Retrain the iPhone controller, bound the action search, and test reaching before picking.
+4. **An action-labelled baseline.** A world model trained on the simulated episodes with their actions would show how much of the gap comes from learning actions from video.
 
 ## Checkpoints
 
