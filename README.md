@@ -114,7 +114,7 @@ uv run h2r data push
 
 ```bash
 uv run h2r train --set name=wm-phone data.root=data/h2r-phone/ data.hf_repo=batgre/h2r-phone
-uv run h2r train --set name=wm-robots data.root=data/h2r-robots-1h30/ data.hf_repo=batgre/h2r-robots-1h30 data.max_videos=102
+uv run h2r train --set name=wm-robots data.root=data/h2r-robots-1h30/ data.hf_repo=batgre/h2r-robots-1h30 data.max_videos=134
 uv run h2r controller train --set name=ctrl-phone world_model=outputs/wm-phone
 ```
 
