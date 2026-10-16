@@ -64,3 +64,70 @@ def test_lift_goal_frames():
     assert goal_frames(states, sim, cfg | {"subgoals": False}) == [18]
     assert goal_frames(states, [{"object": [0, 0, 0.83]}] * 20, cfg) is None
     assert goal_frames(states, sim, cfg | {"goal": "offset"}) == [12]
+
+
+def test_gripper_commands_use_measured_state_when_action_is_small():
+    gain, offset = np.ones(3), np.zeros(3)
+    action, state = np.zeros(7), np.zeros(7)
+    state[6] = 0.5  # closed gripper
+    assert to_command(action, state, gain, offset)[6] == 1.0
+
+    action[6] = -0.1  # explicit open overrides the last observed state
+    assert to_command(action, state, gain, offset)[6] == -1.0
+
+    action[6] = 0.1  # explicit close
+    state[6] = 0.0
+    assert to_command(action, state, gain, offset)[6] == 1.0
+
+
+def test_planner_context_uses_measured_actions(monkeypatch):
+    """The next MPC decision must use observed deltas, not the previous planned action."""
+    import torch
+    import h2r.eval.pick as pick
+
+    model, controller = object(), object()
+    monkeypatch.setattr(pick, "load", lambda *args: (model, controller))
+    monkeypatch.setattr(pick, "command_map", lambda *args: (np.ones(3), np.zeros(3)))
+    monkeypatch.setattr(
+        pick, "encode",
+        lambda model, frames, device: torch.zeros(len(frames), 2, 3),
+    )
+    monkeypatch.setattr(
+        pick.RobosuiteEnv, "image",
+        staticmethod(lambda obs, camera: np.zeros((2, 2, 3), dtype=np.uint8)),
+    )
+
+    observed_actions = []
+
+    def capture_actions(model, controller, states, past, source):
+        observed_actions.append(past.cpu().numpy().copy())
+        return torch.zeros(len(past), 3)
+
+    monkeypatch.setattr(pick, "context_latents", capture_actions)
+    monkeypatch.setattr(
+        pick, "plan",
+        lambda *args: torch.tensor([[5.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]]),
+    )
+    monkeypatch.setattr(pick, "to_command", lambda action, state, *cmap: action)
+
+    cfg = {
+        "controller": "unused", "seed": 0, "steps": 2, "camera": "agentview",
+        "planner": {"context": 3, "past_latents": "controller"},
+    }
+    frame = np.zeros((2, 2, 3), dtype=np.uint8)
+    history = np.zeros((2, 7))
+    history[:, 0] = [0.0, 1.0]
+    episode = {"t0": 2, "frames": [frame, frame, frame], "states": history, "goals": [2]}
+    policy = pick.PlannerPolicy(cfg, {}, "cpu")
+    policy.reset(episode)
+
+    current = np.zeros(7)
+    current[0] = 2.0
+    assert policy({}, current)[0] == 5.0
+
+    # The robot moved only 0.5 m, despite a planned displacement of 5 m.
+    current = current.copy()
+    current[0] = 2.5
+    policy({}, current)
+
+    assert [a[:, 0].tolist() for a in observed_actions] == [[1.0, 1.0], [1.0, 0.5]]
