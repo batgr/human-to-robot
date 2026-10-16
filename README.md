@@ -172,6 +172,35 @@ Thus the current results support limited in-domain learning of action-conditione
 
 ![Run 2: failed Robosuite Lift episode using the model trained on real-robot videos](docs/figures/pick-robots-h2-failure.png)
 
+### Why the planner fails
+
+Diagnostics on 10 held-out Robosuite episodes ([`src/h2r/eval/`](src/h2r/eval)) locate four problems, from the world model to the task. "IDM" uses latent actions inferred from the real frames; "controller" uses the latent actions the controller gives for the commands played, which is what the planner scores.
+
+| Run 2 | Human-video model | Robot-video model |
+|---|---:|---:|
+| Skill at step 1, IDM / controller | -3.48 / -3.51 | -3.98 / -4.06 |
+| Counterfactual direction, IDM / controller | 0.22 / -0.01 | 0.22 / 0.15 |
+| Ranking: Spearman cost vs real outcome / regret | 0.79 / 2.1 cm | 0.74 / 2.6 cm |
+| Offline planning Δxyz, planner / no motion | 10.9 / 2.8 cm | 33.3 / 2.8 cm |
+| Same, each step capped at 2 cm | 4.6 / 2.8 cm | 5.3 / 2.8 cm |
+
+*Counterfactual direction: cosine between predicted and real differences of outcomes when several command sequences are played from one state. Offline planning follows Garrido et al.: 64 random clips, the real frame H steps ahead as goal, no simulator; Δxyz is the L1 distance between the summed planned and recorded displacements.*
+
+1. **The world models do not predict the simulation.** Every model predicts Robosuite frames worse than persistence, with the IDM's own latent actions too. None saw a simulated frame in training.
+2. **The command is lost before the prediction.** With the IDM's latent actions, predicted outcomes follow the commands a little (direction 0.22 for both). Through the controller, the human-video model's no longer do (-0.01); the robot-video model's keep most of it (0.15). The run 2 human-video controller is also the weakest (validation R² 0.51, against 0.72 for the robot-video one).
+3. **The planner asks for displacements far larger than the demonstrations.** The controller's action space is standardized (about 2 cm per axis and step), and CEM picks sequences far outside it: every planner is worse than not moving, by 8 to 31 cm in run 2 and by about 33 to 35 cm in run 1 (H = 5). Capping each step at 2 cm divides the error by 2 to 6, but the planned displacement is closer to the recorded one than no motion on only 19% (human) and 12% (robot) of the clips.
+4. **The task is longer than the planner's horizon.** The lift is about 30 steps from the start and the planner looks 2 steps ahead, through the given subgoals. A good ranking over 2 steps does not add up to a pick over 38.
+
+The interface is not the cause: replaying the demonstration's measured actions through the same command map succeeds in 73–87% of episodes. The papers this work follows do not test a closed-loop pick from latent actions either: Garrido et al. evaluate planning offline with a goal 3 steps away, and Terver et al. report low success on picking even with world models trained on real actions.
+
+### What did not work
+
+- **Horizon 5 (Run 1).** Both planners picked 0 of 30 cubes; the human-video planner never came within 3 cm of the cube. Horizon 2 improved prediction and offline planning, and still picked none.
+- **Robot videos as a source.** 173 videos from 6 datasets with different robots, cameras and scenes: the model never beats persistence on its own held-out videos, overfits after step 650 of 1,000 (validation error rises while training error falls), and its latent action collapsed early in Run 2. Little moves between two frames of these videos; whether this lets the KL term switch the latent action off was not tested.
+- **An unconstrained planner** (point 3 above).
+- **Diagnostics that do not predict the pick.** In Run 1 the robot-video model had the best controller (R² 0.79) and the best ranking (Spearman 0.75), and picked no cube. A positive skill on the human videos (Run 2) did not transfer to Robosuite.
+- **Run 1 to Run 2 on the human side.** More and more varied video (12.2 to 20.5 min, a second camera angle) together with the shorter horizon improved the world model: in-domain skill -0.07 to 0.17 at step 1, Robosuite skill -3.29 to -2.14, controllability 0.26 to 0.40, offline Δxyz 38.2 to 10.9 cm. Its controller got worse (R² 0.60 to 0.51, counterfactual direction 0.15 to -0.01). The changes were made together, so no gain is attributed to one of them.
+
 ## Reproduce
 
 `lift.ipynb` runs every step below on Colab, in order.
@@ -219,9 +248,23 @@ running a training again continues it from `last.pt`, and an evaluation that alr
 - **Matched world-model budget.** Run 2 uses the same architecture, training steps and approximately the same number of sampled frames for human and robot videos, but not identical motion statistics, video lengths or numbers of clips.
 - **Separate training stages.** The simulation is used to fit the downstream action controller and to evaluate control, not to train either video-only world model.
 - **Oracle-action prediction metrics.** Validation rollouts use IDM actions inferred from observed future pairs. A high score does not imply that the system can select correct future actions.
-- **Limited statistical evidence.** One training seed per world model, a small human-video dataset from one person, and 30 held-out simulation episodes.
+- **Data scale.** 20.5 min of human video (4,181 training frames); the world model sees 128,000 clips of 5 frames (1,000 steps of 128). Garrido et al., whose latent action model this follows, train on YouTube-Temporal-1B for 30,000 steps of 1,024 clips of 16 frames (about 240 times more clips) with a ViT-L predictor; ours has 2.9 M trainable parameters. At the selected checkpoints the one-step validation error is 1.7 times the training error for the human-video model and 2.0 times for the robot-video model: both fit their few videos more than they generalize from them.
+- **Viewpoints.** The human videos come from two camera angles of one person in one room; Robosuite is seen from a third, and the robot videos from many others.
+- **Limited statistical evidence.** One training seed per world model, 30 held-out simulation episodes (0% success has a Wilson 95% interval of 0–11%), 10 episodes for the diagnostics. Replaying the same actions changes the outcome of 3 or 4 of the 30 episodes from one run to the next.
 - **Not an ablation.** Run 1 and Run 2 vary the data amount, viewpoints and prediction horizon together.
 - **Domain shift.** Neither world model predicts Robosuite dynamics better than persistence; the downstream pick policies fail.
+
+## Next steps
+
+Suggested by the results, not tested:
+
+- **Some in-domain video.** No world model saw a simulated frame and none beats persistence on Robosuite. Garrido et al. (Table S3) find that mixing 10% of in-domain robot video into in-the-wild pretraining lowers their planning error (Δxyz) from 0.14 to 0.09 with noisy latent actions, and to 0.06 with more of it, against 0.05 for a model trained with real actions. The 2,200 simulated episodes already have videos.
+- **More and more varied human video.** The only data change between runs (more minutes, a second angle) came with better prediction on every split, and the train–validation gap is large. A camera closer to Robosuite's view is worth testing: Terver et al. had to match the simulator's camera to DROID's for their models to unroll.
+- **The KL weight per dataset.** One value (1e-3) was used for both video sources and the robot-video latent action collapsed. Garrido et al. find that neither the most nor the least constrained latent action works best.
+- **Fix the controller of the human-video model.** Its latent actions carry the command's direction with the IDM (0.22) but not through the controller (-0.01).
+- **A bounded planner in closed loop.** The 2 cm cap helps offline; Garrido et al. also use 15 CEM iterations against our 10.
+- **Shorter tasks first.** Reaching the cube, then grasping, before the full pick.
+- **An action-conditioned baseline.** A world model trained on the simulated episodes with their actions would tell whether the gap comes from the videos or from learning actions from video.
 
 ## References and acknowledgments
 
