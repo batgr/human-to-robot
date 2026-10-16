@@ -152,7 +152,11 @@ def build_loaders(cfg, device):
         **args,
     )
     val_len = cfg["context"] + cfg["val_horizon"]
-    val_loader = DataLoader(ClipDataset(data["root"], "val", val_len, include=data.get("include")), **args)
+    val = ClipDataset(data["root"], "val", val_len, include=data.get("include"))
+    # fixed shuffled order: the index lists each video's overlapping clips in a row, so in order a batch holds a few
+    # videos and the per-batch metrics (sigreg, rank, controllability's other clip) measure correlated samples
+    order = torch.randperm(len(val), generator=torch.Generator().manual_seed(0)).tolist()
+    val_loader = DataLoader(val, sampler=order, **args)
     return train_loader, val_loader
 
 
