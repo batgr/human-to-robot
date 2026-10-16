@@ -19,7 +19,9 @@ from h2r.training.utils import (
     load_checkpoint,
     make_logger,
     new_metadata,
+    plot_curves,
     prepare_run,
+    record,
     resumed_metadata,
     save_checkpoint,
     setup,
@@ -97,10 +99,12 @@ def evaluate(model, sigreg, loader, cfg, device, autocast):
     - skill(h) = 1 - err(h) / err of persistence (the last context state repeated), the predictor unrolled h steps
       with the IDM's latent actions (oracle). Sums over the whole split, so near-static clips do not blow it up;
     - controllability = 1 - err(z) / err(z of another clip), teacher forcing: 0 when z is ignored;
-    - effective rank of the states (collapse) and active latent dims (Var(mu) > 0.01, Burda et al. 2016)."""
+    - effective rank of the states (collapse) and active latent dims (Var(mu) > 0.01, Burda et al. 2016);
+    - straightness: cosine between consecutive latent velocities s(t+1) - s(t) of the real clips (LeWM, Maes et al.
+      2026): 1 when the states move along straight lines, which a latent distance cost can follow."""
     model.eval()
     C, K, H = cfg["context"], cfg["rollout_steps"]["end"], cfg["val_horizon"]
-    sums, n, ranks = {}, 0, []
+    sums, n, ranks, straight = {}, 0, [], []
     err, persist, shuffled = torch.zeros(H), torch.zeros(H), torch.zeros(2)
     mu_sum = mu_sq = n_mu = 0
     for clip in loader:
@@ -118,6 +122,8 @@ def evaluate(model, sigreg, loader, cfg, device, autocast):
         target = emb[:, 1 : C + 1]
         shuffled += torch.stack([(tf.float() - target).pow(2).sum(), (tf_other.float() - target).pow(2).sum()]).cpu()
         ranks.append(effective_rank(emb.flatten(0, 2)))
+        v = (emb[:, 1:] - emb[:, :-1]).flatten(2)  # (B, C + H - 1, N * D)
+        straight.append(F.cosine_similarity(v[:, 1:], v[:, :-1], dim=-1).mean().item())
         mu = z.flatten(0, 1)
         mu_sum, mu_sq, n_mu = mu_sum + mu.sum(0), mu_sq + mu.pow(2).sum(0), n_mu + len(mu)
         for k, v in out.items():
@@ -129,6 +135,7 @@ def evaluate(model, sigreg, loader, cfg, device, autocast):
     metrics |= {f"skill_h{h + 1}": float(skill[h]) for h in range(H)} | {"skill": float(skill.mean())}
     metrics["controllability"] = float(1 - shuffled[0] / shuffled[1])
     metrics["rank"] = sum(ranks) / len(ranks)
+    metrics["straightness"] = sum(straight) / len(straight)
     var = mu_sq / n_mu - (mu_sum / n_mu).pow(2)
     metrics["active_dims"] = int((var > 0.01).sum())
     return metrics
@@ -223,21 +230,21 @@ def train(cfg):
                 autocast,
             )
             step += 1
-            if wandb:
-                wandb.log(
-                    {f"train/{k}": v.item() for k, v in out.items()}
-                    | {
-                        "train/K": K,
-                        "lr/muon": scheds[0].get_last_lr()[0],
-                        "lr/adamw": scheds[1].get_last_lr()[0],
-                    },
-                    step=step,
-                )
+            record(
+                run_dir,
+                wandb,
+                {f"train/{k}": v.item() for k, v in out.items()}
+                | {
+                    "train/K": K,
+                    "lr/muon": scheds[0].get_last_lr()[0],
+                    "lr/adamw": scheds[1].get_last_lr()[0],
+                },
+                step,
+            )
 
             if step % cfg["eval_every"] == 0 or step == cfg["iterations"]:
                 val = evaluate(model, sigreg, val_loader, cfg, device, autocast)
-                if wandb:
-                    wandb.log({f"val/{k}": v for k, v in val.items()}, step=step)
+                record(run_dir, wandb, {f"val/{k}": v for k, v in val.items()}, step)
                 log(f"step {step}/{cfg['iterations']} K {K} | " + " | ".join(f"{k} {v:.4f}" for k, v in val.items()))
                 if val["skill"] > best:  # mean skill over the horizons: a collapsing space also lowers the raw errors
                     best = val["skill"]
@@ -247,5 +254,6 @@ def train(cfg):
                 break
 
     log(f"done | best val skill {best:.4f}")
+    plot_curves(run_dir)
     if wandb:
         wandb.finish()

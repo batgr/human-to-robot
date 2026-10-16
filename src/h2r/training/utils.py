@@ -131,6 +131,46 @@ def init_wandb(cfg, run_dir, meta, meta_path):
     return wandb
 
 
+def record(run_dir, wandb, metrics, step):
+    """Appends the metrics of a step to run_dir/metrics.jsonl (curves.png), and logs them to W&B when enabled"""
+    with open(run_dir / "metrics.jsonl", "a") as f:
+        f.write(json.dumps({"step": step} | metrics) + "\n")
+    if wandb:
+        wandb.log(metrics, step=step)
+
+
+def plot_curves(run_dir, smooth=50):
+    """Every metric of metrics.jsonl against the step, in run_dir/curves.png. After a resume, a step logged twice keeps
+    its last value; train metrics are smoothed over `smooth` steps"""
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    curves = {}
+    for line in open(run_dir / "metrics.jsonl"):
+        row = json.loads(line)
+        for k, v in row.items():
+            if k != "step":
+                curves.setdefault(k, {})[row["step"]] = v
+    names = sorted(curves)
+    cols = 4
+    fig, axes = plt.subplots(math.ceil(len(names) / cols), cols, figsize=(4 * cols, 2.6 * math.ceil(len(names) / cols)),
+                             squeeze=False)
+    for ax, name in zip(axes.flat, names):
+        steps, values = zip(*sorted(curves[name].items()))
+        values = np.array(values, dtype=float)
+        if name.startswith("train/") and len(values) > smooth:
+            values = np.convolve(values, np.ones(smooth) / smooth, mode="valid")
+            steps = steps[smooth - 1 :]
+        ax.plot(steps, values, lw=1)
+        ax.set_title(name, fontsize=9)
+        ax.tick_params(labelsize=7)
+    for ax in axes.flat[len(names) :]:
+        ax.axis("off")
+    fig.tight_layout()
+    fig.savefig(run_dir / "curves.png", dpi=110)
+    plt.close(fig)
+
+
 def save_checkpoint(path, model, opts, scheds, epoch, step, best):
     state = {
         k: v for k, v in model.state_dict().items() if not k.startswith("encoder.")

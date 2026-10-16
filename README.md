@@ -1,89 +1,122 @@
 # Human-to-Robot
 
-## Setup
+Can a robot learn to act from videos of people? A world model learns from video alone how a scene changes: an inverse
+dynamics model (IDM) infers a latent action between two frames, and a predictor rolls the scene forward with it. A
+small controller then maps the robot's real actions to these latent actions, so that a planner can search for the
+robot actions whose predicted outcome reaches a goal image. The measure is pick success in closed loop, in simulation
+(robosuite, Panda, Lift).
+
+Question: does a world model learned from human videos serve a robot as well as one learned from robot videos? Two
+world models, same code, compute and number of training frames, only the video differs: human videos filmed with a
+phone, and real robot videos. Each gets a controller trained on the same simulated robot episodes.
+
+## Results
+
+### World models
+
+_To be added: training curves (prediction loss, SIGReg, KL), skill(h), controllability, effective rank, active latent
+dimensions, straightness, phone vs robot videos, each with a short analysis._
+
+### Controllers
+
+_To be added: training and validation loss, validation R², for each world model._
+
+### Pick success
+
+| Policy | Success (95% interval) | Reached | Grasped |
+|---|---|---|---|
+| random | | | |
+| replay | | | |
+| planner, phone world model | | | |
+| planner, robot world model | | | |
+
+## Data and models
+
+- Human videos: https://huggingface.co/datasets/batgre/h2r-phone
+- Robot videos: https://huggingface.co/datasets/batgre/h2r-robots-1h30
+- Simulated robot episodes: https://huggingface.co/datasets/batgre/h2r-sim-v3
+- World models and controllers: https://huggingface.co/batgre/h2r-lift
+
+## Try the trained model
 
 ```bash
 uv sync
+uv run hf download batgre/h2r-lift --local-dir outputs
+uv run hf download batgre/h2r-sim-v3 --repo-type dataset --local-dir data/h2r-sim --include "raw/Panda/Lift/scripted/*"
+uv run h2r eval pick --set name=try controller=outputs/ctrl-phone "policies=[planner]" episodes=5
+```
+
+The planner, with the world model learned from phone videos, picks the cube from 5 test states (`ctrl-robots` for
+the one learned from robot videos). Results in `outputs/try/results.json`, frames of a success and of a
+failure in `outputs/try/episode_success.png` and `episode_failure.png`.
+
+## How it works
+
+| Component | Input -> output | Trained on |
+|---|---|---|
+| Encoder | frame -> tokens | frozen (DINOv2-small) |
+| IDM | two consecutive states -> latent action | video |
+| Predictor | past states and latent actions -> next state | video |
+| Controller | real action and current state -> latent action | robot episodes with actions |
+| Planner | current frames, goal frame -> next action | none (CEM over real actions, replans after every observation) |
+
+## Usage
+
+### Setup
+
+```bash
+uv sync
+uv run hf auth login
+uv run wandb login
 ```
 
 `ffmpeg` must be installed (`brew install ffmpeg` on macOS).
 
-## Data
+### Data
 
-2. Extract the frames:
-
-   ```bash
-   uv run h2r data extract
-   ```
-
-3. Push to the Hugging Face Hub (after `uv run hf auth login`):
-
-   ```bash
-   uv run h2r data push
-   ```
-
-Simulation episodes with actions (robosuite), written to `raw/` like any video folder:
+Robot episodes (robosuite, `configs/data/sim.yaml`), downloaded or collected again:
 
 ```bash
+uv run hf download batgre/h2r-sim-v3 --repo-type dataset --local-dir data/h2r-sim
 uv run h2r data collect --config configs/data/sim.yaml   # <robot>/<task>/<policy>/episode_<seed>/: videos, state.parquet, sim.parquet
-uv run h2r data extract --config configs/data/sim.yaml   # actions: end-effector deltas, as for DROID
+uv run h2r data extract --config configs/data/sim.yaml   # frame shards; actions: end-effector deltas
+uv run h2r data push --config configs/data/sim.yaml
 ```
 
-## Training
+Any folder of videos (`raw_dir` in `configs/data/config.yaml`):
 
 ```bash
-uv run wandb login
-uv run h2r train --config configs/training/world_model.yaml
-uv run h2r train --set name=wm-A data.root=data/h2r-sim/ data.max_videos=10   # any config value, nested with dots
+uv run h2r data extract   # 4 fps, 224 px, split by video
+uv run h2r data push
 ```
 
-Every command takes `--set key=value ...`. A run goes to `output_dir/name`: running a training again continues it from
-`last.pt` (with its own config), and an evaluation that already wrote `results.json` is not run again.
-
-Training runs a fixed number of iterations, whatever the data budget. The rollout depth K grows during training
-(`rollout_steps`: teacher forcing first, then up to the planning horizon). Validation, every `eval_every` iterations: the
-losses, skill(h) = 1 − error / error of persistence for h = 1..5 (predictor unrolled with
-the IDM's latent actions), controllability, effective rank of the states and active latent dimensions. `best.pt` has
-the best mean skill.
-
-Controller (real action + current frame -> latent action) for a trained world model, on episodes with actions:
+### Training
 
 ```bash
-uv run h2r controller train --set world_model=outputs/h2r
+uv run h2r train --set name=wm-phone data.root=data/h2r-phone/ data.hf_repo=batgre/h2r-phone
+uv run h2r train --set name=wm-robots data.root=data/h2r-robots-1h30/ data.hf_repo=batgre/h2r-robots-1h30 data.max_videos=87
+uv run h2r controller train --set name=ctrl-phone world_model=outputs/wm-phone
 ```
 
-Validation: L2 to the IDM's latent action and R² against always predicting the mean one. `init_from` starts from a
-trained controller (e.g. Panda -> Sawyer).
+Every command takes `--config` and `--set key=value ...` (nested keys with dots). A run goes to `output_dir/name`:
+running a training again continues it from `last.pt`, and an evaluation that already wrote `results.json` is not run
+again. `data.max_videos` sets a data budget, the same episodes for the world model and the controller; `init_from`
+fine-tunes a trained world model. Each run writes `metrics.jsonl` and, at the end, `curves.png`.
 
-Data budget (world model and controller): `data.include` and `data.max_videos` keep the same episodes for both, whatever
-the training seed, and a smaller budget is part of a larger one. `init_from` in the world model config fine-tunes a
-trained world model (e.g. SSv2, then robot videos).
-
-## Evaluation
-
-The central measure is pick success in closed loop: on held-out test episodes, the planner replans after every
-observation; a pick succeeds when the object is lifted 4 cm while grasped. Baselines: random commands, and a replay of
-the demonstration's actions (a check of the command interface).
+### Evaluation
 
 ```bash
-uv run h2r eval pick --config configs/eval/pick.yaml             # random, replay and planner on the same initial states
-uv run h2r eval transfer --config configs/eval/transfer.yaml     # arms A (robot only), B (SSv2 + robot), C (SSv2 frozen)
+uv run h2r eval pick --set controller=outputs/ctrl-phone             # random, replay and planner on the same test states
+uv run h2r eval interface                                           # requested vs obtained displacement of the commands
+uv run h2r eval prediction --set controller=outputs/ctrl-phone       # skill(h): IDM (oracle), controller, controller in the loop
+uv run h2r eval counterfactual --set controller=outputs/ctrl-phone   # sequences from one state: different and coherent outcomes?
+uv run h2r eval ranking --set controller=outputs/ctrl-phone          # planner cost vs real outcome of played sequences
+uv run h2r eval transfer                                            # human-to-robot transfer from pick runs per arm
 ```
 
-`h2r eval transfer` reads pick results per (arm, robot episodes, seed): success per budget, gain over the robot-only arm
-with a paired bootstrap over the initial states and the seeds, and the budgets between which the robot-only arm reaches
-the same success.
+A pick succeeds when the object is lifted 4 cm while grasped.
 
-Diagnostics, to explain a success or a failure (same episodes and planner, `configs/eval/diagnostics.yaml`):
-
-```bash
-uv run h2r eval interface        # requested vs obtained displacement of the commands
-uv run h2r eval prediction       # skill(h) with the IDM (oracle), the controller, the controller in the loop
-uv run h2r eval counterfactual   # sequences played from one state: are their predicted outcomes different and coherent?
-uv run h2r eval ranking          # planner cost vs real outcome (gripper and object) of played sequences
-```
-
-## Tests
+### Tests
 
 ```bash
 uv run pytest

@@ -21,7 +21,9 @@ from h2r.training.utils import (
     load_checkpoint,
     make_logger,
     new_metadata,
+    plot_curves,
     prepare_run,
+    record,
     resumed_metadata,
     save_checkpoint,
     setup,
@@ -168,16 +170,12 @@ def train_controller(cfg):
         opt.step()
         sched.step()
         step += 1
-        if wandb:
-            wandb.log(
-                {"train/loss": loss.item(), "lr": sched.get_last_lr()[0]}, step=step
-            )
+        record(run_dir, wandb, {"train/loss": loss.item(), "lr": sched.get_last_lr()[0]}, step)
 
         if step % cfg["eval_every"] == 0 or step == cfg["iterations"]:
             val_loss = evaluate(ctrl, val, device, autocast)
             r2 = 1 - val_loss / baseline  # 0: no better than the mean latent action
-            if wandb:
-                wandb.log({"val/loss": val_loss, "val/r2": r2}, step=step)
+            record(run_dir, wandb, {"val/loss": val_loss, "val/r2": r2}, step)
             log(
                 f"step {step}/{cfg['iterations']} | train loss {loss.item():.4f} | val loss {val_loss:.4f} | val r2 {r2:.3f}"
             )
@@ -189,5 +187,6 @@ def train_controller(cfg):
             save_checkpoint(run_dir / "last.pt", ctrl, [opt], [sched], 0, step, best)
 
     log(f"done | best val loss {best:.4f}")
+    plot_curves(run_dir)
     if wandb:
         wandb.finish()
