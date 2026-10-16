@@ -187,13 +187,9 @@ Phone videos: _to be added: how they were filmed (scene, objects, camera positio
 videos (65 / 6 / 10) from one angle, the next 77 (59 / 8 / 10) from another. Location metadata and audio are removed
 before upload.
 
-Trained models, in [batgre/h2r-lift](https://huggingface.co/batgre/h2r-lift) (`config.yaml`, `best.pt`,
-`curves.png` each):
-
-| | World model, phone | World model, robots | Controller, phone | Controller, robots |
-|---|---|---|---|---|
-| Run 1 | [wm-phone](https://huggingface.co/batgre/h2r-lift/tree/main/wm-phone) | [wm-robots](https://huggingface.co/batgre/h2r-lift/tree/main/wm-robots) | [ctrl-phone](https://huggingface.co/batgre/h2r-lift/tree/main/ctrl-phone) | [ctrl-robots](https://huggingface.co/batgre/h2r-lift/tree/main/ctrl-robots) |
-| Run 2 | [wm-phone-h2](https://huggingface.co/batgre/h2r-lift/tree/main/wm-phone-h2) | [wm-robots-h2](https://huggingface.co/batgre/h2r-lift/tree/main/wm-robots-h2) | [ctrl-phone-h2](https://huggingface.co/batgre/h2r-lift/tree/main/ctrl-phone-h2) | [ctrl-robots-h2](https://huggingface.co/batgre/h2r-lift/tree/main/ctrl-robots-h2) |
+Trained model: the world model learned from human videos (run 2) and its controller, in
+[batgre/h2r-lift](https://huggingface.co/batgre/h2r-lift) ([world model](https://huggingface.co/batgre/h2r-lift/tree/main/wm-phone-h2),
+[controller](https://huggingface.co/batgre/h2r-lift/tree/main/ctrl-phone-h2)).
 
 ## Reproduce
 
@@ -207,13 +203,13 @@ uv run hf auth login && uv run wandb login     # ffmpeg is also needed (brew ins
 **Run the trained planner** on 5 test states:
 
 ```bash
-uv run hf download batgre/h2r-lift --local-dir outputs
+uv run hf download batgre/h2r-lift --local-dir outputs --include "wm-phone-h2/*" --include "ctrl-phone-h2/*"
 uv run hf download batgre/h2r-sim-v3 --repo-type dataset --local-dir data/h2r-sim --include "raw/Panda/Lift/scripted/*"
 uv run h2r eval pick --set name=try controller=outputs/ctrl-phone-h2 "policies=[planner]" episodes=5 planner.horizon=2
 ```
 
 Results in `outputs/try/results.json`, frames of a success and of a failure in `episode_success.png` and
-`episode_failure.png`. Use `ctrl-robots-h2` for the robot world model.
+`episode_failure.png`.
 
 **Train again** (data, world models, controllers, pick):
 
