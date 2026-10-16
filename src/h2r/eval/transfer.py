@@ -17,15 +17,10 @@ Robot data and training compute are reported separately: one does not stand for 
 import json
 from pathlib import Path
 
-import matplotlib
-
-matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-
 import numpy as np
 
 from h2r.training.utils import make_logger
-
 
 ARMS = {"A": "A, robot only", "B": "B, human + robot", "C": "C, human frozen"}
 

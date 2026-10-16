@@ -4,8 +4,12 @@ Runs go to output_dir/name. Running a training again continues it from last.pt; 
 results.json is not run again."""
 
 import argparse
+import os
 
 import yaml
+
+# figures go to files; overrides the inline backend a notebook kernel (Colab) passes to !h2r
+os.environ["MPLBACKEND"] = "agg"
 
 from h2r.data import prepare, sim
 

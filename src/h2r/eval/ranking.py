@@ -9,17 +9,19 @@ much worse (cm) the sequence the world model prefers is than the best one.
 
 import json
 
-import matplotlib
-
-matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-
 import numpy as np
 import torch
 import yaml
 from scipy.stats import spearmanr
 
-from h2r.eval.episodes import command_map, held_out_episodes, make_env, planner_context, play
+from h2r.eval.episodes import (
+    command_map,
+    held_out_episodes,
+    make_env,
+    planner_context,
+    play,
+)
 from h2r.plan import encode, load, physical
 from h2r.training.utils import make_logger, prepare_run, setup
 

@@ -14,11 +14,7 @@ Policies (add one: a class with reset(episode) and __call__(obs, state) -> OSC c
 import json
 import time
 
-import matplotlib
-
-matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-
 import numpy as np
 import torch
 import yaml
