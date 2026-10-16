@@ -7,6 +7,7 @@ import torch
 from h2r.data.dataset import select
 from h2r.eval.counterfactual import scores
 from h2r.eval.pick import wilson
+from h2r.eval.planning import displacement_error
 from h2r.eval.transfer import interval, load_successes, savings
 from h2r.training.controller import select_transitions
 
@@ -62,3 +63,10 @@ def test_counterfactual_scores():
     assert perfect["identification"] == 1 and abs(perfect["direction"] - 1) < 1e-5 and abs(perfect["spread"] - 1) < 1e-5
     blind = scores(real.mean(0, keepdim=True).expand(8, 32) + 1e-3 * torch.randn(8, 32), real)
     assert blind["spread"] < 0.01
+
+
+def test_displacement_error_compares_summed_translations():
+    recorded = torch.tensor([[0.01, 0.0, 0.0, 0.3, 0, 0, 0.2], [0.01, 0.02, 0.0, 0, 0, 0, 0]])
+    other_path = torch.tensor([[0.0, 0.02, 0.0, 0, 0, 0, 0], [0.02, 0.0, 0.0, 0, 0, 0, 0]])
+    assert abs(displacement_error(other_path, recorded)) < 1e-5  # same end point, rotation and gripper ignored
+    assert abs(displacement_error(torch.zeros_like(recorded), recorded) - 4.0) < 1e-4  # 2 + 2 cm

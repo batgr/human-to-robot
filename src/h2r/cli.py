@@ -53,6 +53,10 @@ EVALS = {  # h2r eval <name>: module h2r.eval.<name>, default config, help
         "configs/eval/diagnostics.yaml",
         "requested vs obtained displacement of the commands",
     ),
+    "planning": (
+        "configs/eval/diagnostics.yaml",
+        "offline planning to a goal H steps away (Δxyz, Garrido et al.)",
+    ),
 }
 
 

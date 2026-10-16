@@ -1,4 +1,4 @@
-# Why a pick succeeds or fails (h2r eval prediction | counterfactual | ranking | interface), on the same
+# Why a pick succeeds or fails (h2r eval prediction | counterfactual | ranking | interface | planning), on the same
 # held-out test episodes and planner settings as h2r eval pick. Runs go to output_dir/name/<diagnostic>.
 name: diagnostics
 seed: 0
@@ -21,6 +21,7 @@ stride: 2                              # prediction: one start every stride fram
 counterfactual: {sequences: 8}         # sequences played from the same state (identification chance: 1 / 8)
 ranking: {candidates: 64}              # sequences scored and played from the same state
 interface: {every: 4}                  # one recorded action every 4 frames
+planning: {clips: 64}                  # random clips, goal planner.horizon frames ahead (Garrido et al.: 64)
 
 planner:                               # as in configs/eval/pick.yaml
   context: 3
