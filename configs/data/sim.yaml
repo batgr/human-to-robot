@@ -24,8 +24,7 @@ tasks:                            # task -> object observation and workspace (wo
     max_hold: 12
 policies: [scripted, random]      # random: varied actions for the IDM and the controller (scripted ones are correlated)
 episodes: 1100                    # per robot, task and policy; episode k uses seed k. Train ~1540 (as the controller
-                                  # ablation of 2026-10-14), test ~220 scripted: ~130 where the cube is lifted (Panda:
-                                  # 60%), for h2r eval pick
+                                  # ablation of 2026-10-14), test ~220 scripted
 steps: 40                         # actions per episode (steps + 1 frames)
 frameskip: 5                      # control steps per action: 20 Hz / 5 = 4 actions per second
 cameras: [agentview]              # one video per camera, e.g. [agentview, frontview] (cameras of every task)

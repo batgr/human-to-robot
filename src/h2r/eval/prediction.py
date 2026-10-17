@@ -3,24 +3,51 @@
 On held-out test episodes, from every stride-th frame t, the predictor is unrolled h = 1..horizon steps:
 - oracle      latent actions from the IDM, which sees the real future: the best the world model can do;
 - controller  the controller on the recorded actions and the real states;
-- loop        the controller in the loop, on the predicted states, as when planning.
+- loop        the controller in the loop, on the predicted states.
 skill(h) = 1 - error / error of persistence (the current state repeated): 0 is no better than predicting no change.
 Picture: the real future frames, and for each predicted state the nearest real frame of the other test episodes.
 """
 
+import io
 import json
+from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
+import pyarrow.parquet as pq
 import torch
 import yaml
+from PIL import Image
 
-from h2r.data.prepare import states_to_actions
-from h2r.eval.episodes import held_out_episodes
-from h2r.plan import encode, load
+from h2r.data.prepare import extract_frames, split_of, states_to_actions
+from h2r.models.controller import load_controller
 from h2r.training.utils import make_logger, prepare_run, setup
 
 LEVELS = ("oracle", "controller", "loop")
+
+
+def test_episodes(cfg, sim_cfg):
+    """Camera frames and robot states of the first cfg["episodes"] test episodes (split as h2r data extract does)"""
+    path = f"{cfg['robot']}/{cfg['task']}/{cfg['episodes_from']}"
+    out = []
+    for folder in sorted((Path(sim_cfg["raw_dir"]) / path).glob("episode_*")):
+        if len(out) == cfg["episodes"]:
+            break
+        if split_of(f"{path}/{folder.name}", sim_cfg["split"]) != "test":
+            continue
+        video = folder / f"{cfg['camera']}.mp4"
+        frames = [np.asarray(Image.open(io.BytesIO(j))) for j in extract_frames(video, sim_cfg["fps"], sim_cfg["image_size"])]
+        states = np.asarray(pq.read_table(folder / "state.parquet")["state"].to_pylist())
+        out.append({"name": folder.name, "frames": frames, "states": states})
+    if not out:
+        raise ValueError(f"no test episode in {Path(sim_cfg['raw_dir']) / path}")
+    return out
+
+
+@torch.no_grad()
+def encode(model, frames, device):
+    """(T, H, W, 3) uint8 -> (T, N, D)"""
+    return model.encode(torch.from_numpy(np.stack(frames)).permute(0, 3, 1, 2)[None].to(device))[0]
 
 
 @torch.no_grad()
@@ -70,11 +97,11 @@ def run(cfg):
     log = make_logger(run_dir)
     device, _ = setup(cfg)
     sim_cfg = yaml.safe_load(open(cfg["sim_config"]))
-    model, ctrl = load(cfg["controller"], device)
-    C, H = cfg["planner"]["context"], cfg["horizon"]
+    model, ctrl = load_controller(cfg["controller"], device)
+    C, H = cfg["context"], cfg["horizon"]
     err, persist, n = {lv: np.zeros(H) for lv in LEVELS}, np.zeros(H), 0
     shown = None
-    episodes = held_out_episodes(cfg, sim_cfg)
+    episodes = test_episodes(cfg, sim_cfg)
     for ep in episodes:
         ep["emb"] = encode(model, ep["frames"], device)
         actions = torch.tensor(states_to_actions(ep["states"]), dtype=torch.float32, device=device)

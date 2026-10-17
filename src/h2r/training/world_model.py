@@ -94,7 +94,7 @@ def effective_rank(x):
 
 @torch.no_grad()
 def evaluate(model, sigreg, loader, cfg, device, autocast):
-    """Validation with a full real context (as in planning), on clips of context + val_horizon frames:
+    """Validation with a full real context (as at inference), on clips of context + val_horizon frames:
     - the losses, on the first context + K frames, K the last rollout_steps of the curriculum;
     - skill(h) = 1 - err(h) / err of persistence (the last context state repeated), the predictor unrolled h steps
       with the IDM's latent actions (oracle). Sums over the whole split, so near-static clips do not blow it up;

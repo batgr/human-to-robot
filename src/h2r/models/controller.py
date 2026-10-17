@@ -1,8 +1,12 @@
 """Controller from real to latent actions, after Garrido et al. 2026 (arXiv:2601.05230)"""
 
+from pathlib import Path
+
 import torch
+import yaml
 from torch import nn
 
+from h2r.models.jepa import load_world_model
 from h2r.models.module import CrossBlock, Transformer
 
 
@@ -78,3 +82,13 @@ def build_controller(cfg, wm_cfg):
         latent_dim=idm.get("action_dim"),
         **cfg,
     )
+
+
+def load_controller(run_dir, device):
+    """Frozen controller of a training run (config.yaml + best.pt) and the frozen world model it was trained for"""
+    run_dir = Path(run_dir)
+    cfg = yaml.safe_load(open(run_dir / "config.yaml"))
+    model, wm_cfg = load_world_model(cfg["world_model"], device)
+    ctrl = build_controller(cfg["model"], wm_cfg).to(device)
+    ctrl.load_state_dict(torch.load(run_dir / "best.pt", map_location=device)["model"])
+    return model, ctrl.eval().requires_grad_(False)

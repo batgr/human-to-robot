@@ -17,7 +17,7 @@ init_from: null              # world model run to start from (fine-tuning)
 context: 3                   # Terver et al.: 2 frames give the velocity, 3 the acceleration
 rollout_steps:               # K, curriculum (scheduled sampling): teacher forcing first, then own predictions
   start: 1                   # 1: teacher forcing only
-  end: 2                     # = planning horizon H (run 1: 5) = val_horizon: trained as deep as it is used
+  end: 2                     # H (run 1: 5) = val_horizon: trained as deep as it is validated
   ramp: 0.5                  # fraction of the iterations to go from start to end, one step at a time
 val_horizon: 2               # validation clips of context + val_horizon frames: skill(h) for h = 1..val_horizon
 

@@ -66,7 +66,7 @@ class JEPA(nn.Module):
         """Imagine the future of real action sequences, the controller in the loop (Garrido et al. 2026, eq. 2)
         emb: (B, C, N, D) context states, the last one is the current state
         latents: (B, C - 1, D) latent actions linking the context states
-        actions: (B, S, H, act_dim) S candidate sequences of H real actions, or of H latent actions when there is
+        actions: (B, S, H, act_dim) S sequences of H real actions, or of H latent actions when there is
             no controller (e.g. the IDM's, to evaluate the predictor alone)
         returns the predicted states (B, S, H, N, D)
         """
@@ -81,14 +81,6 @@ class JEPA(nn.Module):
             pred = self.predict(emb[:, -history_size:], z[:, -history_size:])[:, -1:]
             emb = torch.cat([emb, pred], dim=1)
         return emb[:, -h:].unflatten(0, (b, s))
-
-    def criterion(self, pred, goal):
-        """Squared L2 distance of the last predicted state to the goal: (B, S, H, N, D), (B, N, D) -> (B, S)"""
-        return (pred[:, :, -1] - goal[:, None]).pow(2).sum(dim=(-2, -1))
-
-    def get_cost(self, emb, latents, goal, actions, controller, history_size=3):
-        """Cost of each candidate action sequence: (B, S)"""
-        return self.criterion(self.rollout(emb, latents, actions, controller, history_size), goal)
 
 
 def build_model(cfg):

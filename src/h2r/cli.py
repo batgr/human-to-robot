@@ -29,33 +29,9 @@ def train_controller(cfg):
 
 
 EVALS = {  # h2r eval <name>: module h2r.eval.<name>, default config, help
-    "pick": (
-        "configs/eval/pick.yaml",
-        "pick success in closed loop, the central measure",
-    ),
-    "transfer": (
-        "configs/eval/transfer.yaml",
-        "human-to-robot transfer from pick results (arms A, B, C)",
-    ),
     "prediction": (
-        "configs/eval/diagnostics.yaml",
-        "skill(h) of the world model on robot episodes",
-    ),
-    "counterfactual": (
-        "configs/eval/diagnostics.yaml",
-        "different actions, different and coherent predictions?",
-    ),
-    "ranking": (
-        "configs/eval/diagnostics.yaml",
-        "planner cost vs real outcome of played sequences",
-    ),
-    "interface": (
-        "configs/eval/diagnostics.yaml",
-        "requested vs obtained displacement of the commands",
-    ),
-    "planning": (
-        "configs/eval/diagnostics.yaml",
-        "offline planning to a goal H steps away (Δxyz, Garrido et al.)",
+        "configs/eval/prediction.yaml",
+        "skill(h) of the world model and its controller on robot episodes",
     ),
 }
 

@@ -4,29 +4,9 @@
 
 Can an action-conditioned world model trained on human videos transfer to a robot with a different embodiment? We train an inverse dynamics model (IDM) and a JEPA-style predictor on videos without action labels, then test the learned dynamics on a Panda arm in Robosuite.
 
-The current models learn some in-domain dynamics but do **not** yet transfer successfully to simulation. This repository includes the data, checkpoints, experiments, and failure cases.
+The current models learn some in-domain dynamics but do **not** yet transfer to simulation, and video data is the main limit. This branch starts from the Lift challenge ([`main`](https://github.com/batgr/human-to-robot/tree/main)) without its planning code, to scale up the video data. The challenge's planner, pick evaluation and their results stay on `main`.
 
 **Resources:** [iPhone videos](https://huggingface.co/datasets/batgre/h2r-phone) · [Robot videos](https://huggingface.co/datasets/batgre/h2r-robots-1h30) · [Simulation episodes](https://huggingface.co/datasets/batgre/h2r-sim-v3) · [Checkpoints](https://huggingface.co/batgre/h2r-lift)
-
-## Run the simulation
-
-Run the pretrained **human-video** model and controller on five held-out Robosuite Panda Lift episodes. No training is needed.
-
-```bash
-uv sync
-
-uv run hf download batgre/h2r-lift --local-dir outputs \
-  --include "wm-phone-h2/*" --include "ctrl-phone-h2/*"
-
-uv run hf download batgre/h2r-sim-v3 --repo-type dataset \
-  --local-dir data/h2r-sim --include "raw/Panda/Lift/scripted/*"
-
-uv run h2r eval pick --set name=demo-phone-h2 \
-  controller=outputs/ctrl-phone-h2 "policies=[planner]" \
-  episodes=5 planner.horizon=2
-```
-
-Results: `outputs/demo-phone-h2/results.json` and an episode filmstrip (`episode_failure.png` for the first failure; `episode_success.png` only if a pick succeeds). This is a **headless evaluation**, not an interactive GUI or an MP4 recording. The published planners achieved **0/30 successful lifts**.
 
 ## Model
 
@@ -123,43 +103,21 @@ The images below compare real future frames (top) with the real dataset frames n
 |:---:|:---:|
 | ![Real vs nearest predicted frames: iPhone-trained WM](docs/figures/imagined-phone-h2.png) | ![Real vs nearest predicted frames: robot-trained WM](docs/figures/imagined-robots-h2.png) |
 
-### 3. Downstream simulation
+## Why more data
 
-A separate controller maps robot end-effector actions into the IDM's latent-action space. CEM plans sequences in Robosuite, executes the first action, then observes and replans. The planner is given pre-grasp, grasp and lift goal images taken from held-out scripted demonstrations.
-
-**Neither planner lifted the cube in 30 test episodes.** Random actions also scored 0%; replaying recorded demonstration actions succeeded in 73–87% across three evaluations. Capping each planned step at 2 cm (`planner.max_norm=0.02`) did not change this: 0 of 30 for both models. The learned model is not yet accurate enough under the simulation's action and visual distributions.
-
-![Example failed pick with the iPhone-video world model](docs/figures/pick-phone-h2-failure.png)
-
-[See the robot-video model's failure](docs/figures/pick-robots-h2-failure.png).
-
-## Analysis
-
-**Where the pipeline breaks.** Diagnostics on held-out Robosuite episodes, Run 2 ([`src/h2r/eval/`](src/h2r/eval)):
-
-| | iPhone WM | Robot WM |
-|---|---:|---:|
-| Prediction follows the command: IDM actions / through the controller | 0.22 / -0.01 | 0.22 / 0.15 |
-| Offline planning error Δxyz: planner / no motion | 10.9 / 2.8 cm | 33.3 / 2.8 cm |
-| Same, steps capped at 2 cm | 4.6 / 2.8 cm | 5.3 / 2.8 cm |
-
-*Follows the command: cosine between predicted and real differences of outcomes for command sequences played from the same state (0: unrelated). Offline planning follows Garrido et al.: 64 clips, goal 2 steps ahead, L1 error of the summed displacement.*
-
-- **Controller.** The iPhone model responds to the command through the IDM's latent actions but not through the controller: the robot action's effect is lost there.
-- **Planner.** CEM picks displacements far larger than the demonstrations' and does worse than not moving, even with the 2 cm cap.
-- **Task length.** The lift is about 30 steps away; the planner sees 2.
-- The replay baseline rules out the action interface.
-
-**What the runs suggest.**
+From the Lift challenge runs:
 - **Data is the main limit.** The extra video of Run 2 came with better prediction on every split. The one-step validation error is still 1.7× the training error for the iPhone model and 2.0× for the robot model. Garrido et al. train on about 240× more clips, with a ViT-L predictor.
 - **Varied robot video is not a shortcut.** Mixing 6 robots, cameras and scenes, the robot model overfits after step 650 of 1,000.
-- **Offline diagnostics did not predict a pick.** The Run 1 robot model had the best controller and ranking scores and picked no cube.
 
-**Next steps**, in order of expected impact:
+**Next steps:**
 1. **Much more human video.** Something-Something v2 (220k clips of hands manipulating objects), then Ego4D.
 2. **A little in-domain video.** Garrido et al. (Table S3) cut their planning error from 0.14 to 0.09 with 10% in-domain data; our simulated episodes already have videos.
-3. **Fix the controller–planner link.** Retrain the iPhone controller, bound the action search, and test reaching before picking.
-4. **An action-labelled baseline.** A world model trained on the simulated episodes with their actions would show how much of the gap comes from learning actions from video.
+
+## Controller
+
+A separate controller maps a robot end-effector action and the current frame to the IDM's latent action, so that the world model can be driven by robot actions. It is trained on the simulated Panda Lift episodes. `uv run h2r eval prediction` measures the world model's skill on held-out simulated episodes with the IDM's actions, with the controller, and with the controller in the loop.
+
+Code: [controller](src/h2r/models/controller.py) · [training](src/h2r/training/controller.py) · [prediction](src/h2r/eval/prediction.py)
 
 ## Checkpoints
 
@@ -173,7 +131,7 @@ A separate controller maps robot end-effector actions into the IDM's latent-acti
 
 ## Reproduce training
 
-The [Colab notebook](lift.ipynb) runs data preparation, training and evaluation. To repeat the Run 2 world-model experiments:
+The [Colab notebook](lift.ipynb) runs data preparation, training and the prediction evaluation. To repeat the Run 2 world-model experiments:
 
 ```bash
 uv sync
@@ -194,15 +152,15 @@ uv run h2r train --set name=wm-robots-h2 \
   data.hf_repo=batgre/h2r-robots-1h30 data.max_videos=173 $H
 ```
 
-Use `uv run h2r controller train` to fit the downstream action controller. Evaluation and data commands are listed in `uv run h2r --help`, and their configs are in [`configs/`](configs/). Run outputs include checkpoints, metrics and the resolved configuration. Tests: `uv run pytest`.
+Use `uv run h2r controller train` to fit the action controller. Evaluation and data commands are listed in `uv run h2r --help`, and their configs are in [`configs/`](configs/). Run outputs include checkpoints, metrics and the resolved configuration. Tests: `uv run pytest`.
 
 ## Limitations
 
 - Only **20.5 minutes of personally recorded videos** from one person, with two camera angles.
-- One training seed per model; downstream results use 30 held-out simulation episodes.
+- One training seed per model.
 - Evaluation prediction actions are inferred from future frames and are not directly usable by a robot.
 - Run 1 vs Run 2 changes multiple factors together.
-- Domain shift and weak action conditioning prevent successful robot control in the current experiments.
+- Domain shift and weak action conditioning: neither model beats persistence in Robosuite.
 
 ## References and credits
 
@@ -211,4 +169,3 @@ Parts of [`jepa.py`](src/h2r/models/jepa.py) and [`module.py`](src/h2r/models/mo
 - Maes et al., [*LeWorldModel: Stable End-to-End Joint-Embedding Predictive Architecture from Pixels*](https://arxiv.org/abs/2603.19312), 2026.
 - Garrido et al., [*Learning Latent Action World Models in the Wild*](https://arxiv.org/abs/2601.05230), 2026.
 - Oquab et al., *DINOv2: Learning Robust Visual Features without Supervision*, 2024.
-- Terver et al., *What Drives Success in Physical Planning with Joint-Embedding Predictive World Models?*, 2026.

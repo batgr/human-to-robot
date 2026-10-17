@@ -1,4 +1,4 @@
-"""robosuite environment: the collection (h2r data collect) and the evaluations (h2r eval) go through this class"""
+"""robosuite environment: the collection (h2r data collect) goes through this class"""
 
 import numpy as np
 import robosuite as suite
@@ -40,33 +40,6 @@ class RobosuiteEnv:
     def sim_state(self):
         """MuJoCo state, then the gripper's command integrator (robosuite keeps it outside the MuJoCo state)"""
         return np.r_[self.env.sim.get_state().flatten(), self.gripper().current_action]
-
-    def restore(self, sim_state):
-        """Puts the simulator back in a recorded state. The controllers cache the robot state and their goal: they are
-        refreshed, otherwise the same commands do not replay the same way (1.2 cm apart after one action; refreshed,
-        replays stay within a millimeter). Do not call reset() before: it makes replays drift further. The gripper's
-        command integrator is restored too, otherwise the previous episode's gripper target carries over.
-        """
-        n = len(self.env.sim.get_state().flatten())
-        self.env.sim.set_state_from_flattened(np.asarray(sim_state[:n]))
-        self.gripper().current_action = np.array(sim_state[n:], dtype=float)
-        self.env.sim.forward()
-        for controller in self.env.robots[
-            0
-        ].composite_controller.part_controllers.values():
-            controller.update(force=True)
-            controller.reset_goal()
-        return self.with_images(self.env._get_observations(force_update=True))
-
-    def success(self):
-        """The task's own success test (Lift: cube 4 cm above the table)"""
-        return bool(self.env._check_success())
-
-    def grasped(self):
-        """The gripper holds one of the task's objects (robosuite's contact test)"""
-        objects = [self.env.cube] if hasattr(self.env, "cube") else self.env.objects
-        gripper = self.env.robots[0].gripper
-        return any(self.env._check_grasp(gripper=gripper, object_geoms=o) for o in objects)
 
     def robot_state(self, obs):
         """[x, y, z, roll, pitch, yaw, gripper] in the robot base frame, as DROID's cartesian and gripper positions"""
