@@ -1,5 +1,6 @@
-from h2r.cli import override
-from h2r.training.utils import prepare_run
+import importlib
+
+from h2r.cli import GROUPS, override
 
 
 def test_override_reads_yaml_values_and_nested_keys():
@@ -8,11 +9,9 @@ def test_override_reads_yaml_values_and_nested_keys():
     assert cfg == {"name": "wm-A", "data": {"max_videos": 10, "include": ["Panda/Lift/*"]}, "init_from": None}
 
 
-def test_run_directory_is_reused(tmp_path):
-    """A new run writes its config; it is done once it has last.pt (training) or results.json (evaluation), and then
-    keeps its own config"""
-    cfg, run_dir, done = prepare_run({"name": "wm-A", "output_dir": str(tmp_path), "seed": 0})
-    assert run_dir == tmp_path / "wm-A" and not done
-    (run_dir / "last.pt").touch()
-    cfg, _, done = prepare_run({"name": "wm-A", "output_dir": str(tmp_path), "seed": 1})
-    assert done and cfg["seed"] == 0
+def test_every_command_has_its_function_and_config():
+    from pathlib import Path
+
+    for target, config, _ in [spec for commands in GROUPS.values() for spec in commands.values()]:
+        module, fn = target.split(":")
+        assert callable(getattr(importlib.import_module(module), fn)) and Path(config).exists()

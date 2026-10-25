@@ -1,12 +1,11 @@
-
 raw_dir: data/raw/
 processed_dir: data/processed/
 
 fps: 4
 image_size: 224
-min_frames: 5
-actions: false      # true: actions from a state.parquet next to the videos of an episode (see prepare.py)
-split_by: video     # video, or folder: the cameras of an episode stay in the same split
+min_frames: 2
+actions: false
+split_by: video
 
 split:
   val: 0.1
