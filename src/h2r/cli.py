@@ -22,6 +22,15 @@ GROUPS = {
 }
 
 
+def load(path):
+    """YAML config, every value ending in .yaml replaced by the content of that file"""
+    cfg = yaml.safe_load(open(path))
+    return {
+        k: load(v) if isinstance(v, str) and v.endswith(".yaml") else v
+        for k, v in cfg.items()
+    }
+
+
 def override(cfg, pairs):
     """key=value pairs"""
     for pair in pairs:
@@ -54,7 +63,7 @@ def main():
 
     args = parser.parse_args()
     module, fn = args.target.split(":")
-    cfg = override(yaml.safe_load(open(args.config)), args.set) | {
+    cfg = override(load(args.config), args.set) | {
         "config_path": args.config
     }
     getattr(importlib.import_module(module), fn)(cfg)

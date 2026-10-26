@@ -1,6 +1,6 @@
 import torch
 from h2r.utils import seed_everything, make_autocast, make_run_dir
-import yaml
+from pathlib import Path
 
 
 def train(cfg):
@@ -14,7 +14,9 @@ def train(cfg):
     torch.set_float32_matmul_precision("high")
     autocast = make_autocast(cfg["precision"], device)
 
-    cfg["model"] = yaml.safe_load(open(cfg["model"]))
-    cfg["data"] = yaml.safe_load(open(cfg["data"]))
     run_dir = make_run_dir(cfg)
 
+
+def build_loaders(cfg, device):
+    clip_len = cfg["context"] + cfg["rollout_steps"]
+    root = cfg["data"]["processed_dir"]
