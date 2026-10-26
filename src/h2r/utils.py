@@ -19,7 +19,7 @@ def make_autocast(precision, device):
     if precision == "fp32":
         return contextlib.nullcontext()
     dtype = {"bf16": torch.bfloat16, "fp16": torch.float16}[precision]
-    return torch.autocast(torch.device(device).type, dtype=dtype)
+    return torch.autocast(device.type, dtype=dtype)
 
 
 def git_info():
