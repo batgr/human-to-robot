@@ -1,0 +1,10 @@
+name: wm-test
+seed: 0
+model: configs/models/world_model.yaml
+data: configs/data/config.yaml
+output_dir: outputs
+precision: bf16
+context: 3
+rollout_steps: 2
+batch_size: 128
+num_workers: 4

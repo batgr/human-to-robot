@@ -18,6 +18,7 @@ GROUPS = {
             "frame shards -> Hugging Face Hub",
         ),
     },
+    "train": {"wm": ("h2r.train:train", "configs/training/world_model.yaml", "")},
 }
 
 
