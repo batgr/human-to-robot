@@ -24,7 +24,6 @@ def trained(ctrl):
 def test_shapes(ctrl):
     assert ctrl(torch.randn(4, A), torch.randn(4, N, D)).shape == (4, D)
     assert ctrl(torch.randn(4, 3, A), torch.randn(4, 3, N, D)).shape == (4, 3, D)
-    assert Controller(num_patches=N, dim=D, latent_dim=8)(torch.randn(2, A), torch.randn(2, N, D)).shape == (2, 8)
 
 
 def test_starts_at_zero(ctrl):

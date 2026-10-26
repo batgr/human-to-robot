@@ -18,7 +18,6 @@ class Controller(nn.Module):
         *,
         num_patches,
         dim,
-        latent_dim=None,
         act_dim=7,
         depth=2,
         heads=4,
@@ -28,13 +27,14 @@ class Controller(nn.Module):
         super().__init__()
         dim_head = dim_head or dim // heads
         mlp_dim = mlp_dim or 4 * dim
-        latent_dim = latent_dim or dim  # the IDM's latent actions live in the latent dim
 
         # standardization of the real actions, set from the training actions and saved with the weights
         self.register_buffer("act_mean", torch.zeros(act_dim))
         self.register_buffer("act_std", torch.ones(act_dim))
 
-        self.pos_embedding = nn.Parameter(torch.randn(1, num_patches, dim))  # position in the image
+        self.pos_embedding = nn.Parameter(
+            torch.randn(1, num_patches, dim)
+        )  # position in the image
         self.transformer = Transformer(dim, dim, dim, depth, heads, dim_head, mlp_dim)
         self.act_mlp = nn.Sequential(
             nn.Linear(act_dim, dim),
@@ -45,7 +45,9 @@ class Controller(nn.Module):
         )
         self.readout = CrossBlock(dim, heads, dim_head, mlp_dim)
         self.norm = nn.LayerNorm(dim)
-        self.head = nn.Linear(dim, latent_dim)
+        self.head = nn.Linear(
+            dim, dim
+        )  # the IDM's latent actions live in the latent dim
 
         nn.init.zeros_(self.head.weight)  # start at the prior mean: z_hat = 0
         nn.init.zeros_(self.head.bias)
@@ -56,17 +58,21 @@ class Controller(nn.Module):
         a = actions.reshape(-1, actions.size(-1)).float()
         std = a.std(0)
         self.act_mean.copy_(a.mean(0))
-        self.act_std.copy_(torch.where(std > 1e-6, std, torch.ones_like(std)))  # constant dims stay unscaled
+        self.act_std.copy_(
+            torch.where(std > 1e-6, std, torch.ones_like(std))
+        )  # constant dims stay unscaled
 
     def forward(self, action, emb):
         """
         action: (..., act_dim) real actions, in the dataset's units
         emb: (..., N, D) representation of the frame the action starts from
-        returns z_hat: (..., latent_dim)
+        returns z_hat: (..., D)
         """
         lead, n = emb.shape[:-2], emb.size(-2)
         x = emb.reshape(-1, n, emb.size(-1)) + self.pos_embedding
-        x = self.transformer(x, causal=False, frame_size=n)  # one frame: every patch sees every patch
+        x = self.transformer(
+            x, causal=False, frame_size=n
+        )  # one frame: every patch sees every patch
         a = (action.reshape(-1, action.size(-1)) - self.act_mean) / self.act_std
         query = self.act_mlp(a)[:, None]  # the action reads the state
         h = self.readout(query, x, frame_size=n)[:, 0]
@@ -79,7 +85,6 @@ def build_controller(cfg, wm_cfg):
     return Controller(
         num_patches=idm["num_patches"],
         dim=idm["dim"],
-        latent_dim=idm.get("action_dim"),
         **cfg,
     )
 

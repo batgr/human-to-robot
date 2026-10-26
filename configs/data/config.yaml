@@ -4,6 +4,7 @@ processed_dir: data/processed/
 fps: 4
 image_size: 224
 min_frames: 2
+clip_len: 5
 actions: false
 split_by: video
 
