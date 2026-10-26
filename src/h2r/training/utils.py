@@ -42,3 +42,9 @@ def make_run_dir(cfg):
         cfg | {"git": git}, open(run_dir / "config.yaml", "w"), sort_keys=False
     )
     return run_dir
+
+
+def forever(loader):
+    """restarts the loader at the end of each epoch"""
+    while True:
+        yield from loader

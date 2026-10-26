@@ -18,7 +18,13 @@ GROUPS = {
             "frame shards -> Hugging Face Hub",
         ),
     },
-    "train": {"wm": ("h2r.train:train", "configs/training/world_model.yaml", "")},
+    "train": {
+        "wm": (
+            "h2r.training.world_model:train",
+            "configs/training/world_model.yaml",
+            "",
+        )
+    },
 }
 
 
@@ -63,7 +69,5 @@ def main():
 
     args = parser.parse_args()
     module, fn = args.target.split(":")
-    cfg = override(load(args.config), args.set) | {
-        "config_path": args.config
-    }
+    cfg = override(load(args.config), args.set) | {"config_path": args.config}
     getattr(importlib.import_module(module), fn)(cfg)
