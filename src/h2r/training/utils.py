@@ -79,7 +79,7 @@ def log(run_dir, step, metrics, wandb_run=None):
         f.write(json.dumps({"step": step} | metrics) + "\n")
     if wandb_run is not None:
         wandb_run.log(metrics, step=step)
-    keys = ["loss", "tf", "kl", "sigreg", "gnorm", "lr_adamw", "clips_per_s"]
+    keys = ["loss", "tf", "kl", "sigreg", "straightness", "gnorm", "lr_adamw", "clips_per_s"]
     keys = [f"val/{k}" for k in keys] + keys
     print(
         f"step {step} | "

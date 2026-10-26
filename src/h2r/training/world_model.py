@@ -207,11 +207,14 @@ def evaluate(model, sigreg, loader, cfg, device, autocast):
     sums, n = {}, 0
     for clip in loader:
         clip = clip.to(device, non_blocking=True)
+        b = clip.shape[0]
         with autocast:
-            out = losses(model, sigreg, model.encode(clip), cfg)
+            emb = model.encode(clip)
+            out = losses(model, sigreg, emb, cfg)
+        out["straightness"] = straightness(emb)
         for k, v in out.items():
-            sums[k] = sums.get(k, 0) + v.float() * len(clip)  # batch means -> sums
-        n += len(clip)
+            sums[k] = sums.get(k, 0) + v.float() * b
+        n += b
     model.train()
     return {f"val/{k}": v.item() / n for k, v in sums.items()}
 
@@ -233,17 +236,23 @@ def train_step(model, sigreg, clip, opts, scheds, params, cfg, autocast):
 
 
 def losses(model, sigreg, emb, cfg):
-    C = cfg["context"]
     beta = cfg["loss"]["beta"]
     sig_w = cfg["loss"]["sigreg"]
-    z, kl = model.idm(emb)
+    z, kl = model.idm(emb)  # (B, T-1, D), one latent action per transition
 
-    pred = model.predict(emb[:, :C], z[:, :C])  # (B, C, N, D)
+    pred = model.predict(emb[:, :-1], z)  # (B, T-1, N, D)
 
-    tf = F.mse_loss(pred.float(), emb[:, 1 : C + 1].float())
+    tf = F.mse_loss(pred.float(), emb[:, 1:].float())  # every transition of the clip
 
     sig = sigreg(rearrange(emb.float(), "b t n d -> (t n) b d"))
 
     loss = tf + (beta * kl) + (sig_w * sig)
 
     return {"loss": loss, "tf": tf, "kl": kl, "sigreg": sig}
+
+
+def straightness(emb):
+    """Temporal straightness (LeWM eq. 9): mean cosine similarity between consecutive
+    latent velocities v_t = z_t+1 - z_t, a frame being all its tokens; 1 = straight path"""
+    v = (emb[:, 1:] - emb[:, :-1]).flatten(2).float()  # (B, T-1, N*D)
+    return F.cosine_similarity(v[:, :-1], v[:, 1:], dim=-1).mean()
