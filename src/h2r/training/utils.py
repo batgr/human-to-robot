@@ -6,6 +6,8 @@ import subprocess
 from datetime import datetime
 from pathlib import Path
 import yaml
+import math
+import json
 
 
 def seed_everything(seed):
@@ -48,3 +50,36 @@ def forever(loader):
     """restarts the loader at the end of each epoch"""
     while True:
         yield from loader
+
+
+def warmup_cosine(warmup, total):
+
+    def f(step):
+        if step < warmup:
+            return (step + 1) / warmup
+        return 0.5 * (1 + math.cos(math.pi * (step - warmup) / (total - warmup)))
+
+    return f
+
+
+def peak_memory_gb(device):
+    """Peak memory held by tensors on the GPU, None on CPU"""
+    if device.type == "cuda":
+        return torch.cuda.max_memory_allocated() / 1e9
+    if device.type == "mps":
+        return torch.mps.driver_allocated_memory() / 1e9
+    return None
+
+
+def log(run_dir, step, metrics, wandb_run=None):
+    """One line in run_dir/metrics.jsonl, the same metrics to W&B if enabled, a short print"""
+    metrics = {k: round(v, 6) for k, v in metrics.items() if v is not None}
+    with open(run_dir / "metrics.jsonl", "a") as f:
+        f.write(json.dumps({"step": step} | metrics) + "\n")
+    if wandb_run is not None:
+        wandb_run.log(metrics, step=step)
+    keys = ["loss", "tf", "kl", "sigreg", "gnorm", "lr_adamw", "clips_per_s"]
+    print(
+        f"step {step} | "
+        + " | ".join(f"{k} {metrics[k]:.4g}" for k in keys if k in metrics)
+    )
