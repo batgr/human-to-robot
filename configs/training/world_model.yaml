@@ -28,3 +28,5 @@ wandb:
   project: h2r
 
 eval_every: 250
+
+resume: null   # run directory to resume from its last.pt, with its saved config

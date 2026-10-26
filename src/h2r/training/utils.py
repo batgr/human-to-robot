@@ -8,6 +8,7 @@ from pathlib import Path
 import yaml
 import math
 import json
+import os
 
 
 def seed_everything(seed):
@@ -84,3 +85,32 @@ def log(run_dir, step, metrics, wandb_run=None):
         f"step {step} | "
         + " | ".join(f"{k} {metrics[k]:.4g}" for k in keys if k in metrics)
     )
+
+
+def rng_state():
+    """States of every random generator, to resume a run exactly"""
+    return {
+        "python": random.getstate(),
+        "numpy": np.random.get_state(),
+        "torch": torch.get_rng_state(),
+        "cuda": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
+        "mps": torch.mps.get_rng_state() if torch.mps.is_available() else None,
+    }
+
+
+def set_rng_state(state):
+    """The generator states are CPU tensors, even in a checkpoint loaded onto the GPU"""
+    random.setstate(state["python"])
+    np.random.set_state(state["numpy"])
+    torch.set_rng_state(state["torch"].cpu())
+    if state["cuda"] is not None:
+        torch.cuda.set_rng_state_all([t.cpu() for t in state["cuda"]])
+    if state["mps"] is not None:
+        torch.mps.set_rng_state(state["mps"].cpu())
+
+
+def save_checkpoint(path, **state):
+    """Written to a temporary file then renamed: a crash never leaves a half-written checkpoint"""
+    tmp = path.with_suffix(".tmp")
+    torch.save(state, tmp)
+    os.replace(tmp, path)

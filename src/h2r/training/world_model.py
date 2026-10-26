@@ -11,8 +11,14 @@ from h2r.training.utils import (
     warmup_cosine,
     peak_memory_gb,
     log,
+    rng_state,
+    set_rng_state,
+    save_checkpoint,
 )
+import json
 import time
+from pathlib import Path
+import yaml
 from h2r.models.jepa import build_model
 from h2r.models.module import SIGReg
 
@@ -67,7 +73,17 @@ def build_optimizers(model, cfg):
     return opts, scheds
 
 
+def trainable_state(model):
+    """State dict without the frozen weights (a frozen encoder reloads from the Hub), buffers kept"""
+    frozen = {n for n, p in model.named_parameters() if not p.requires_grad}
+    return {k: v for k, v in model.state_dict().items() if k not in frozen}
+
+
 def train(cfg):
+    if cfg["resume"]:
+        run_dir = Path(cfg["resume"])
+        cfg = yaml.safe_load(open(run_dir / "config.yaml"))  # the run's own config
+        cfg["resume"] = str(run_dir)
     seed_everything(cfg["seed"])
     device = torch.device(
         "cuda"
@@ -81,12 +97,30 @@ def train(cfg):
     train_loader, val_loader = build_loaders(cfg, device)
     train_iter = forever(train_loader)
 
-    run_dir = make_run_dir(cfg)
-
     model = build_model(cfg["model"]).to(device)
     sigreg = SIGReg().to(device)
     params = [p for p in model.parameters() if p.requires_grad]
     opts, scheds = build_optimizers(model, cfg)
+
+    start, best = 1, float("inf")  # best val/loss
+    if cfg["resume"]:
+        ckpt = torch.load(run_dir / "last.pt", map_location=device, weights_only=False)
+        model.load_state_dict(ckpt["model"], strict=False)
+        for o, state in zip(opts, ckpt["opts"]):
+            o.load_state_dict(state)
+        for s, state in zip(scheds, ckpt["scheds"]):
+            s.load_state_dict(state)
+        set_rng_state(ckpt["rng"])
+        start, best = ckpt["step"] + 1, ckpt["best"]
+        metrics_file = (
+            run_dir / "metrics.jsonl"
+        )  # drop what was logged after the checkpoint
+        lines = metrics_file.read_text().splitlines(keepends=True)
+        metrics_file.write_text(
+            "".join(line for line in lines if json.loads(line)["step"] < start)
+        )
+    else:
+        run_dir = make_run_dir(cfg)
 
     print(
         f"run: {run_dir} | device: {device} | trainable params: {sum(p.numel() for p in params)}"
@@ -97,13 +131,18 @@ def train(cfg):
         import wandb
 
         wandb_run = wandb.init(
-            project=cfg["wandb"]["project"], name=run_dir.name, config=cfg, dir=run_dir
+            project=cfg["wandb"]["project"],
+            name=run_dir.name,
+            id=run_dir.name,  # unique (timestamp): a resumed run continues the same W&B run
+            resume="allow",
+            config=cfg,
+            dir=run_dir,
         )
 
     model.train()
     sums, data_time, t0 = {}, 0.0, time.time()  # accumulated over log_every steps
 
-    for step in range(1, cfg["iterations"] + 1):
+    for step in range(start, cfg["iterations"] + 1):
 
         t = time.time()
         clip = next(train_iter).to(device, non_blocking=True)
@@ -131,15 +170,31 @@ def train(cfg):
             log(run_dir, step, metrics, wandb_run)
             sums, data_time, t0 = {}, 0.0, time.time()
 
-        if val_loader is not None and step % cfg["eval_every"] == 0:
+        if step % cfg["eval_every"] == 0 or step == cfg["iterations"]:
             t_eval = time.time()
-            log(
-                run_dir,
-                step,
-                evaluate(model, sigreg, val_loader, cfg, device, autocast),
-                wandb_run,
+            if val_loader is not None:
+                metrics = evaluate(model, sigreg, val_loader, cfg, device, autocast)
+                log(run_dir, step, metrics, wandb_run)
+                if metrics["val/loss"] < best:
+                    best = metrics["val/loss"]
+                    save_checkpoint(
+                        run_dir / "best.pt",
+                        model=trainable_state(model),
+                        step=step,
+                        val_loss=best,
+                    )
+            save_checkpoint(
+                run_dir / "last.pt",
+                model=trainable_state(model),
+                opts=[o.state_dict() for o in opts],
+                scheds=[s.state_dict() for s in scheds],
+                step=step,
+                best=best,
+                rng=rng_state(),
             )
-            t0 += time.time() - t_eval  # the evaluation time is not training throughput
+            t0 += (
+                time.time() - t_eval
+            )  # evaluation and saving are not training throughput
 
     if wandb_run is not None:
         wandb_run.finish()
