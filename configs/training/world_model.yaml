@@ -26,3 +26,5 @@ optim:
 wandb:
   enabled: false
   project: h2r
+
+eval_every: 250

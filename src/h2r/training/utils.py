@@ -79,6 +79,7 @@ def log(run_dir, step, metrics, wandb_run=None):
     if wandb_run is not None:
         wandb_run.log(metrics, step=step)
     keys = ["loss", "tf", "kl", "sigreg", "gnorm", "lr_adamw", "clips_per_s"]
+    keys = [f"val/{k}" for k in keys] + keys
     print(
         f"step {step} | "
         + " | ".join(f"{k} {metrics[k]:.4g}" for k in keys if k in metrics)

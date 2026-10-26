@@ -131,8 +131,34 @@ def train(cfg):
             log(run_dir, step, metrics, wandb_run)
             sums, data_time, t0 = {}, 0.0, time.time()
 
+        if val_loader is not None and step % cfg["eval_every"] == 0:
+            t_eval = time.time()
+            log(
+                run_dir,
+                step,
+                evaluate(model, sigreg, val_loader, cfg, device, autocast),
+                wandb_run,
+            )
+            t0 += time.time() - t_eval  # the evaluation time is not training throughput
+
     if wandb_run is not None:
         wandb_run.finish()
+
+
+@torch.no_grad()
+def evaluate(model, sigreg, loader, cfg, device, autocast):
+
+    model.eval()
+    sums, n = {}, 0
+    for clip in loader:
+        clip = clip.to(device, non_blocking=True)
+        with autocast:
+            out = losses(model, sigreg, model.encode(clip), cfg)
+        for k, v in out.items():
+            sums[k] = sums.get(k, 0) + v.float() * len(clip)  # batch means -> sums
+        n += len(clip)
+    model.train()
+    return {f"val/{k}": v.item() / n for k, v in sums.items()}
 
 
 def train_step(model, sigreg, clip, opts, scheds, params, cfg, autocast):
