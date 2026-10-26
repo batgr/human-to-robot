@@ -9,7 +9,7 @@ import yaml
 from einops import rearrange
 from torch import nn
 
-from h2r.models.encoder import FrozenEncoder
+from h2r.models.encoder import FrozenEncoder, ViTEncoder
 from h2r.models.idm import IDM
 from h2r.models.module import MLP, ARPredictor, PatchProjector
 
@@ -76,19 +76,26 @@ class JEPA(nn.Module):
         actions = actions.flatten(0, 1)
         for i in range(h):
             # the controller reads the state the action starts from (real, then predicted); z[k] leads from emb[k]
-            step = controller(actions[:, i], emb[:, -1]) if controller else actions[:, i]
+            step = (
+                controller(actions[:, i], emb[:, -1]) if controller else actions[:, i]
+            )
             z = torch.cat([z, step[:, None]], dim=1)
             pred = self.predict(emb[:, -history_size:], z[:, -history_size:])[:, -1:]
             emb = torch.cat([emb, pred], dim=1)
         return emb[:, -h:].unflatten(0, (b, s))
 
 
+ENCODERS = {"frozen": FrozenEncoder, "vit": ViTEncoder}
+
+
 def build_model(cfg):
+    enc = dict(cfg["encoder"])
+    encoder = ENCODERS[enc.pop("type")](**enc)
     return JEPA(
-        FrozenEncoder(**cfg["encoder"]),
+        encoder,
         ARPredictor(**cfg["predictor"]),
         IDM(**cfg["idm"]),
-        PatchProjector(**cfg["projector"]),
+        PatchProjector(input_dim=enc["dim"], **cfg["projector"]),
         MLP(**cfg["pred_proj"]),
     )
 

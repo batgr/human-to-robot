@@ -2,11 +2,10 @@
 
 import torch
 from torch import nn
-from transformers import AutoModel
+from transformers import AutoModel, ViTConfig, ViTModel
 
 
 class FrozenEncoder(nn.Module):
-    """Frames in [0, 255] -> tokens of a frozen pretrained ViT, CLS first"""
 
     def __init__(self, name, image_size, dim):
         super().__init__()
@@ -30,9 +29,32 @@ class FrozenEncoder(nn.Module):
 
     @torch.no_grad()
     def forward(self, pixels, **kwargs):
-        """
-        pixels: (B, 3, H, W) in [0, 255]
-        returns the model output: .last_hidden_state (B, 1 + N, dim)
-        """
+
         x = (pixels / 255 - self.mean) / self.std
         return self.model(pixel_values=x)
+
+
+class ViTEncoder(nn.Module):
+    """ViT trained from scratch with the world model, as in LeWorldModel (ViT-tiny, patch 14)"""
+
+    def __init__(self, image_size, patch_size, dim, depth, heads):
+        super().__init__()
+        config = ViTConfig(
+            image_size=image_size,
+            patch_size=patch_size,
+            hidden_size=dim,
+            num_hidden_layers=depth,
+            num_attention_heads=heads,
+            intermediate_size=4 * dim,
+        )
+        self.model = ViTModel(config, add_pooling_layer=False)
+        self.register_buffer(
+            "mean", torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1)
+        )  # ImageNet
+        self.register_buffer(
+            "std", torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1)
+        )
+
+    def forward(self, pixels, **kwargs):
+        x = (pixels / 255 - self.mean) / self.std
+        return self.model(pixel_values=x, **kwargs)

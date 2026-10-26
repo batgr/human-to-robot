@@ -45,7 +45,7 @@ def override(cfg, pairs):
         d = cfg
         for k in path:
             d = d.setdefault(k, {})
-        d[last] = yaml.safe_load(value)
+        d[last] = load(value) if value.endswith(".yaml") else yaml.safe_load(value)
     return cfg
 
 

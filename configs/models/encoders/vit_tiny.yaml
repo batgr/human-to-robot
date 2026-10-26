@@ -1,0 +1,7 @@
+# Trained from scratch with the world model, as in LeWorldModel
+type: vit
+image_size: 224
+patch_size: 14   # 16 x 16 patch grid at 224 px, like DINOv2
+dim: 192
+depth: 12
+heads: 3

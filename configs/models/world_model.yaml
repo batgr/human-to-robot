@@ -1,13 +1,9 @@
 embed_dim: &D 128
 num_patches: &N 16
 
-encoder:
-  name: facebook/dinov2-small
-  image_size: 224
-  dim: &E 384
+encoder: configs/models/encoders/vit_tiny.yaml   # or dinov2_small.yaml (frozen)
 
-projector:
-  input_dim: *E
+projector:   # input_dim: the encoder dim
   hidden_dim: 192
   output_dim: *D
 

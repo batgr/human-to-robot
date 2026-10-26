@@ -132,7 +132,9 @@ class CrossAttention(nn.Module):
         drop = self.dropout if self.training else 0.0
         q = self.to_q(self.norm_q(x))
         k, v = self.to_kv(self.norm_kv(context)).chunk(2, dim=-1)
-        q, k, v = (rearrange(t, "b t (h d) -> b h t d", h=self.heads) for t in (q, k, v))
+        q, k, v = (
+            rearrange(t, "b t (h d) -> b h t d", h=self.heads) for t in (q, k, v)
+        )
         frame = (
             torch.arange(context.size(1), device=x.device) // frame_size
         )  # frame index per context token
@@ -244,14 +246,20 @@ class Transformer(nn.Module):
             self.layers.append(
                 block_class(hidden_dim, heads, dim_head, mlp_dim, dropout)
             )
-        self.conditional = block_class is ConditionalBlock  # AdaLN blocks read c, the others a causal flag
+        self.conditional = (
+            block_class is ConditionalBlock
+        )  # AdaLN blocks read c, the others a causal flag
 
     def forward(self, x, c=None, causal=True, frame_size=1):
         x = self.input_proj(x)
         if self.conditional:
             c = self.cond_proj(c)
         for block in self.layers:
-            x = block(x, c, frame_size) if self.conditional else block(x, causal, frame_size)
+            x = (
+                block(x, c, frame_size)
+                if self.conditional
+                else block(x, causal, frame_size)
+            )
         return self.output_proj(self.norm(x))
 
 
@@ -283,12 +291,14 @@ class MLP(nn.Module):
 
 
 class PatchProjector(nn.Module):
-    """Compress the encoder patch grid: 16x fewer patches (two stride-2 convs)"""
+    """Compress the encoder patch grid: 16x fewer patches (two stride-2 convs),
+    BatchNorm on the hidden layer as in the LeWM projector"""
 
     def __init__(self, input_dim, hidden_dim, output_dim):
         super().__init__()
         self.net = nn.Sequential(
             nn.Conv2d(input_dim, hidden_dim, kernel_size=2, stride=2),
+            nn.BatchNorm2d(hidden_dim),
             nn.GELU(),
             nn.Conv2d(hidden_dim, output_dim, kernel_size=2, stride=2),
         )
@@ -352,4 +362,3 @@ class ARPredictor(nn.Module):
         x = self.transformer(x, c, frame_size=n)
         x = rearrange(x, "b (t n) d -> b t n d", n=n)
         return x
-

@@ -1,0 +1,5 @@
+# Pretrained and frozen
+type: frozen
+name: facebook/dinov2-small
+image_size: 224
+dim: 384
