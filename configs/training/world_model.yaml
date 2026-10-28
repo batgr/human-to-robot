@@ -8,6 +8,7 @@ context: 3
 rollout_steps: 2
 batch_size: 128
 num_workers: 4
+overfit_batches: 0   # > 0: train and validate on these first batches only
 
 loss:
   beta: 0.001

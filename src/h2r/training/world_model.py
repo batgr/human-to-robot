@@ -1,3 +1,5 @@
+import itertools
+
 import torch
 import torch.nn.functional as F
 from einops import rearrange
@@ -38,6 +40,9 @@ def build_loaders(cfg, device):
         persistent_workers=cfg["num_workers"] > 0,
     )
     train = DataLoader(ds_train, shuffle=True, drop_last=True, **args)
+    if cfg["overfit_batches"]:  # the same first batches for training and validation
+        batches = list(itertools.islice(train, cfg["overfit_batches"]))
+        return batches, batches
     val = None
     if shards(root, "val"):
         ds_val = ClipDataset(root, "val", clip_len)
