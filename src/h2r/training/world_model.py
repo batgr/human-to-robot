@@ -10,6 +10,7 @@ from h2r.metrics.prediction import PredictionQuality
 from h2r.metrics.representation import RepresentationHealth
 from h2r.training.utils import (
     grad_norms,
+    pick_device,
     seed_everything,
     make_autocast,
     make_run_dir,
@@ -97,11 +98,7 @@ def train(cfg):
         cfg = yaml.safe_load(open(run_dir / "config.yaml"))  # the run's own config
         cfg["resume"] = str(run_dir)
     seed_everything(cfg["seed"])
-    device = torch.device(
-        "cuda"
-        if torch.cuda.is_available()
-        else "mps" if torch.mps.is_available() else "cpu"
-    )
+    device = pick_device()
 
     torch.set_float32_matmul_precision("high")
     autocast = make_autocast(cfg["precision"], device)

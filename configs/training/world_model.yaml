@@ -9,6 +9,7 @@ rollout_steps: 2
 batch_size: 128
 num_workers: 4
 overfit_batches: 0   # > 0: train and validate on these first batches only
+check_steps: 100     # h2r check wm
 
 loss:
   beta: 0.001

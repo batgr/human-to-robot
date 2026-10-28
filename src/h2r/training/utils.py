@@ -17,6 +17,14 @@ def seed_everything(seed):
     np.random.seed(seed)
 
 
+def pick_device():
+    return torch.device(
+        "cuda"
+        if torch.cuda.is_available()
+        else "mps" if torch.mps.is_available() else "cpu"
+    )
+
+
 def make_autocast(precision, device):
     """bf16 or fp16 mixed precision, or plain fp32"""
     if precision == "fp32":

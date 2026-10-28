@@ -25,6 +25,13 @@ GROUPS = {
             "",
         )
     },
+    "check": {
+        "wm": (
+            "h2r.training.check:check",
+            "configs/training/world_model.yaml",
+            "sanity check: initialization, then the first check_steps steps with hooks",
+        )
+    },
 }
 
 
