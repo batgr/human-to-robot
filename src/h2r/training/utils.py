@@ -72,15 +72,37 @@ def peak_memory_gb(device):
     return None
 
 
+def grad_norms(model):
+    """Gradient norm of each top-level module (encoder, predictor, idm, ...), before clipping"""
+    norms = {}
+    for name, module in model.named_children():
+        grads = [p.grad.norm() for p in module.parameters() if p.grad is not None]
+        if grads:
+            norms[f"gnorm_{name}"] = torch.stack(grads).norm()
+    return norms
+
+
 def log(run_dir, step, metrics, wandb_run=None):
-    """One line in run_dir/metrics.jsonl, the same metrics to W&B if enabled, a short print"""
+    """One line in run_dir/metrics.jsonl, the same metrics to W&B if enabled (one section per category,
+    the prefix before "/"), a short print"""
     metrics = {k: round(v, 6) for k, v in metrics.items() if v is not None}
     with open(run_dir / "metrics.jsonl", "a") as f:
         f.write(json.dumps({"step": step} | metrics) + "\n")
     if wandb_run is not None:
         wandb_run.log(metrics, step=step)
-    keys = ["loss", "tf", "kl", "sigreg", "straightness", "gnorm", "lr_adamw", "clips_per_s"]
-    keys = [f"val/{k}" for k in keys] + keys
+    keys = [
+        "loss/total",
+        "loss/tf",
+        "optim/gnorm",
+        "system/clips_per_s",
+        "loss/total_val",
+        "prediction/tf",
+        "prediction/persistence",
+        "representation/rankme_token",
+        "representation/temporal_change",
+        "latent_action/active_dims",
+        "latent_action/controllability",
+    ]
     print(
         f"step {step} | "
         + " | ".join(f"{k} {metrics[k]:.4g}" for k in keys if k in metrics)

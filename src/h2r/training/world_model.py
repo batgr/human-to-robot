@@ -3,7 +3,11 @@ import torch.nn.functional as F
 from einops import rearrange
 from torch.utils.data import DataLoader
 from h2r.data.dataset import ClipDataset, shards
+from h2r.metrics.latent_actions import LatentActions
+from h2r.metrics.prediction import PredictionQuality
+from h2r.metrics.representation import RepresentationHealth
 from h2r.training.utils import (
+    grad_norms,
     seed_everything,
     make_autocast,
     make_run_dir,
@@ -35,9 +39,12 @@ def build_loaders(cfg, device):
     )
     train = DataLoader(ds_train, shuffle=True, drop_last=True, **args)
     val = None
-    if shards(root, "val"):  # no validation split in the local data
+    if shards(root, "val"):
         ds_val = ClipDataset(root, "val", clip_len)
-        val = DataLoader(ds_val, shuffle=False, drop_last=False, **args)
+        order = torch.randperm(
+            len(ds_val), generator=torch.Generator().manual_seed(0)
+        ).tolist()
+        val = DataLoader(ds_val, sampler=order, drop_last=False, **args)
     return train, val
 
 
@@ -133,14 +140,14 @@ def train(cfg):
         wandb_run = wandb.init(
             project=cfg["wandb"]["project"],
             name=run_dir.name,
-            id=run_dir.name,  # unique (timestamp): a resumed run continues the same W&B run
+            id=run_dir.name,
             resume="allow",
             config=cfg,
             dir=run_dir,
         )
 
     model.train()
-    sums, data_time, t0 = {}, 0.0, time.time()  # accumulated over log_every steps
+    sums, data_time, t0 = {}, 0.0, time.time()
 
     for step in range(start, cfg["iterations"] + 1):
 
@@ -154,18 +161,23 @@ def train(cfg):
 
         if step % cfg["log_every"] == 0:
             n = cfg["log_every"]
-            metrics = {k: v.item() / n for k, v in sums.items()}
+            m = {k: v.item() / n for k, v in sums.items()}
             elapsed = time.time() - t0
-            metrics |= {
-                "beta_kl": cfg["loss"]["beta"]
-                * metrics["kl"],  # weighted terms: their real share of the loss
-                "sigreg_w": cfg["loss"]["sigreg"] * metrics["sigreg"],
-                "lr_muon": scheds[0].get_last_lr()[0],
-                "lr_adamw": scheds[1].get_last_lr()[0],
-                "clips_per_s": n * cfg["batch_size"] / elapsed,
-                "step_s": elapsed / n,
-                "data_s": data_time / n,
-                "mem_gb": peak_memory_gb(device),
+            metrics = {
+                "loss/total": m["loss"],
+                "loss/tf": m["tf"],
+                "loss/kl": m["kl"],
+                "loss/sigreg": m["sigreg"],
+                "loss/kl_weighted": cfg["loss"]["beta"]
+                * m["kl"],  # weighted terms: their real share of the loss
+                "loss/sigreg_weighted": cfg["loss"]["sigreg"] * m["sigreg"],
+                "optim/lr_muon": scheds[0].get_last_lr()[0],
+                "optim/lr_adamw": scheds[1].get_last_lr()[0],
+                **{f"optim/{k}": v for k, v in m.items() if k.startswith("gnorm")},
+                "system/clips_per_s": n * cfg["batch_size"] / elapsed,
+                "system/step_s": elapsed / n,
+                "system/data_s": data_time / n,
+                "system/mem_gb": peak_memory_gb(device),
             }
             log(run_dir, step, metrics, wandb_run)
             sums, data_time, t0 = {}, 0.0, time.time()
@@ -175,8 +187,8 @@ def train(cfg):
             if val_loader is not None:
                 metrics = evaluate(model, sigreg, val_loader, cfg, device, autocast)
                 log(run_dir, step, metrics, wandb_run)
-                if metrics["val/loss"] < best:
-                    best = metrics["val/loss"]
+                if metrics["loss/total_val"] < best:
+                    best = metrics["loss/total_val"]
                     save_checkpoint(
                         run_dir / "best.pt",
                         model=trainable_state(model),
@@ -192,9 +204,7 @@ def train(cfg):
                 best=best,
                 rng=rng_state(),
             )
-            t0 += (
-                time.time() - t_eval
-            )  # evaluation and saving are not training throughput
+            t0 += time.time() - t_eval
 
     if wandb_run is not None:
         wandb_run.finish()
@@ -202,21 +212,36 @@ def train(cfg):
 
 @torch.no_grad()
 def evaluate(model, sigreg, loader, cfg, device, autocast):
-
+    """Validation metrics"""
     model.eval()
-    sums, n = {}, 0
+    representation, prediction, latent = (
+        RepresentationHealth(),
+        PredictionQuality(),
+        LatentActions(),
+    )
+    loss, n = 0.0, 0
     for clip in loader:
         clip = clip.to(device, non_blocking=True)
-        b = clip.shape[0]
         with autocast:
             emb = model.encode(clip)
             out = losses(model, sigreg, emb, cfg)
-        out["straightness"] = straightness(emb)
-        for k, v in out.items():
-            sums[k] = sums.get(k, 0) + v.float() * b
-        n += b
+            z, _ = model.idm(emb)  # eval: z = mu
+            pred = model.predict(emb[:, :-1], z)
+            representation.update(emb, out["sigreg"])
+            prediction.update(emb, pred)
+            latent.update(model, emb, z, pred, out["kl"])
+        loss += out["loss"].item() * len(clip)
+        n += len(clip)
     model.train()
-    return {f"val/{k}": v.item() / n for k, v in sums.items()}
+    groups = {
+        "representation": representation,
+        "prediction": prediction,
+        "latent_action": latent,
+    }
+    metrics = {"loss/total_val": loss / n}
+    for name, group in groups.items():
+        metrics |= {f"{name}/{k}": v for k, v in group.compute().items()}
+    return metrics
 
 
 def train_step(model, sigreg, clip, opts, scheds, params, cfg, autocast):
@@ -226,6 +251,7 @@ def train_step(model, sigreg, clip, opts, scheds, params, cfg, autocast):
     for o in opts:
         o.zero_grad(set_to_none=True)
     out["loss"].backward()
+    out |= grad_norms(model)
     out["gnorm"] = torch.nn.utils.clip_grad_norm_(
         params, cfg["optim"]["grad_clip"]
     )  # norm before clipping
@@ -249,10 +275,3 @@ def losses(model, sigreg, emb, cfg):
     loss = tf + (beta * kl) + (sig_w * sig)
 
     return {"loss": loss, "tf": tf, "kl": kl, "sigreg": sig}
-
-
-def straightness(emb):
-    """Temporal straightness (LeWM eq. 9): mean cosine similarity between consecutive
-    latent velocities v_t = z_t+1 - z_t, a frame being all its tokens; 1 = straight path"""
-    v = (emb[:, 1:] - emb[:, :-1]).flatten(2).float()  # (B, T-1, N*D)
-    return F.cosine_similarity(v[:, :-1], v[:, 1:], dim=-1).mean()
