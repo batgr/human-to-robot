@@ -14,6 +14,7 @@ class IDM(nn.Module):
         self,
         *,
         dim,
+        z_dim=None,
         depth=2,
         heads=4,
         dim_head=None,
@@ -22,12 +23,13 @@ class IDM(nn.Module):
         super().__init__()
         dim_head = dim_head or dim // heads
         mlp_dim = mlp_dim or 4 * dim
+        z_dim = z_dim or dim
 
         self.transformer = Transformer(dim, dim, dim, depth, heads, dim_head, mlp_dim)
         self.query = nn.Parameter(torch.randn(1, 1, dim) * 0.02)
         self.readout = CrossBlock(dim, heads, dim_head, mlp_dim)
         self.norm = nn.LayerNorm(dim)
-        self.head = nn.Linear(dim, 2 * dim)  # latent actions live in the latent dim
+        self.head = nn.Linear(dim, 2 * z_dim)  # z_dim < dim: a bottleneck on top of the KL
 
         nn.init.zeros_(self.head.weight)  # start at the prior: z ~ N(0, 1), kl = 0
         nn.init.zeros_(self.head.bias)
@@ -35,7 +37,7 @@ class IDM(nn.Module):
     def forward(self, emb):
         """
         emb: (B, T, D)
-        returns z: (B, T-1, D), kl: scalar
+        returns z: (B, T-1, z_dim), kl: scalar
         """
         b = emb.size(0)
         x = torch.stack([emb[:, :-1], emb[:, 1:]], dim=2)  # pairs (t, t+1): (B, T-1, 2, D)

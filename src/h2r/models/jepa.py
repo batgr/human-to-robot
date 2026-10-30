@@ -49,7 +49,7 @@ class JEPA(nn.Module):
     def predict(self, emb, z):
         """Predict next state embedding
         emb: (B, T, D)
-        z: (B, T, D) latent actions
+        z: (B, T, z_dim) latent actions
         """
         b, t = emb.shape[:2]
         preds = self.predictor(emb, z)
@@ -65,14 +65,14 @@ class JEPA(nn.Module):
     def rollout(self, emb, latents, actions, controller=None, history_size=3):
         """Imagine the future of real action sequences, the controller in the loop (Garrido et al. 2026, eq. 2)
         emb: (B, C, D) context states, the last one is the current state
-        latents: (B, C - 1, D) latent actions linking the context states
+        latents: (B, C - 1, z_dim) latent actions linking the context states
         actions: (B, S, H, act_dim) S sequences of H real actions, or of H latent actions when there is
             no controller (e.g. the IDM's, to evaluate the predictor alone)
         returns the predicted states (B, S, H, D)
         """
         b, s, h = actions.shape[:3]
         emb = emb[:, None].expand(-1, s, -1, -1).flatten(0, 1)  # (B*S, C, D)
-        z = latents[:, None].expand(-1, s, -1, -1).flatten(0, 1)  # (B*S, C - 1, D)
+        z = latents[:, None].expand(-1, s, -1, -1).flatten(0, 1)  # (B*S, C - 1, z_dim)
         actions = actions.flatten(0, 1)
         for i in range(h):
             # the controller reads the state the action starts from (real, then predicted); z[k] leads from emb[k]

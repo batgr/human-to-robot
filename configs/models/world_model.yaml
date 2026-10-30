@@ -1,27 +1,30 @@
-embed_dim: &D 128
+embed_dim: &D 192 # LeWM dims (config/train/model/lewm.yaml)
+latent_action_dim: &Z 64 # z < D: a bottleneck on top of the KL (Garrido et al.: 128 for V-JEPA 2-L states)
 
-encoder: configs/models/encoders/vit_tiny.yaml   # or dinov2_small.yaml (frozen)
+encoder: configs/models/encoders/vit_tiny.yaml # or dinov2_small.yaml (frozen)
 
-projector:   # MLP on the encoder's CLS token, input_dim: the encoder dim
-  hidden_dim: 512
+projector: # MLP on the encoder's CLS token, input_dim: the encoder dim
+  hidden_dim: 2048
   output_dim: *D
 
 predictor:
   input_dim: *D
   hidden_dim: *D
+  cond_dim: *Z
   depth: 6
-  heads: 4
-  dim_head: 32
-  mlp_dim: 512
+  heads: 16
+  dim_head: 64
+  mlp_dim: 2048
   dropout: 0.1
   emb_dropout: 0.0
 
 pred_proj:
   input_dim: *D
-  hidden_dim: 512
+  hidden_dim: 2048
   output_dim: *D
 
 idm:
   dim: *D
+  z_dim: *Z
   depth: 2
   heads: 4

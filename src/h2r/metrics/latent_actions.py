@@ -48,8 +48,10 @@ class LatentActions:
 
         clip_b = other(emb)
         pred_b = model.predict(clip_b[:, :-1], z)  # A's actions on B
-        pairs = torch.stack([clip_b[:, :-1], pred_b], dim=2).flatten(0, 1)  # (B * (T-1), 2, D)
-        z_back, _ = model.idm(pairs)  # (B * (T-1), 1, D)
+        pairs = torch.stack([clip_b[:, :-1], pred_b], dim=2).flatten(
+            0, 1
+        )  # (B * (T-1), 2, D)
+        z_back, _ = model.idm(pairs)  # (B * (T-1), 1, z_dim)
         pred_a = model.predict(emb[:, :-1], z_back.view_as(z))
         self.err_cycle += mse(pred_a, target) * b
         self.n += b

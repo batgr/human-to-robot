@@ -13,9 +13,10 @@ class Controller(nn.Module):
     """Latent action of a real action taken from the current frame, to drive the world model without the IDM:
     an MLP on the standardized action and the state"""
 
-    def __init__(self, *, dim, act_dim=7, depth=2, mlp_dim=None):
+    def __init__(self, *, dim, z_dim=None, act_dim=7, depth=2, mlp_dim=None):
         super().__init__()
         mlp_dim = mlp_dim or 4 * dim
+        z_dim = z_dim or dim
 
         # standardization of the real actions, set from the training actions and saved with the weights
         self.register_buffer("act_mean", torch.zeros(act_dim))
@@ -27,9 +28,7 @@ class Controller(nn.Module):
             width = mlp_dim
         self.net = nn.Sequential(*layers)
         self.norm = nn.LayerNorm(mlp_dim)
-        self.head = nn.Linear(
-            mlp_dim, dim
-        )  # the IDM's latent actions live in the latent dim
+        self.head = nn.Linear(mlp_dim, z_dim)  # the IDM's latent actions
 
         nn.init.zeros_(self.head.weight)  # start at the prior mean: z_hat = 0
         nn.init.zeros_(self.head.bias)
@@ -48,7 +47,7 @@ class Controller(nn.Module):
         """
         action: (..., act_dim) real actions, in the dataset's units
         emb: (..., D) state of the frame the action starts from
-        returns z_hat: (..., D)
+        returns z_hat: (..., z_dim)
         """
         a = (action - self.act_mean) / self.act_std
         return self.head(self.norm(self.net(torch.cat([a, emb], dim=-1))))
@@ -56,7 +55,8 @@ class Controller(nn.Module):
 
 def build_controller(cfg, wm_cfg):
     """The controller's dimensions come from the world model, the rest from its own config"""
-    return Controller(dim=wm_cfg["model"]["idm"]["dim"], **cfg)
+    idm = wm_cfg["model"]["idm"]
+    return Controller(dim=idm["dim"], z_dim=idm.get("z_dim"), **cfg)
 
 
 def load_controller(run_dir, device):

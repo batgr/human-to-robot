@@ -61,3 +61,17 @@ def test_idm_on_stacked_pairs_matches_the_clip():
     pairs = torch.stack([emb[:, :-1], emb[:, 1:]], dim=2).flatten(0, 1)  # (B * (T-1), 2, D)
     z_pairs, _ = model.idm(pairs)
     assert torch.allclose(z_pairs.view_as(z), z, atol=1e-6)
+
+
+def test_latent_actions_smaller_than_the_state():
+    """IDM z_dim < D: the predictor reads z through its cond_proj"""
+    from h2r.models.idm import IDM
+    from h2r.models.module import ARPredictor
+
+    D, Z = 16, 4
+    idm = IDM(dim=D, z_dim=Z)
+    predictor = ARPredictor(depth=1, heads=2, mlp_dim=32, input_dim=D, hidden_dim=D, dim_head=8, cond_dim=Z)
+    emb = torch.randn(2, 5, D)
+    z, _ = idm(emb)
+    assert z.shape == (2, 4, Z)
+    assert predictor(emb[:, :-1], z).shape == (2, 4, D)

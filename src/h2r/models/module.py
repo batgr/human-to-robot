@@ -210,8 +210,10 @@ class Transformer(nn.Module):
         mlp_dim,
         dropout=0.0,
         block_class=Block,
+        cond_dim=None,
     ):
         super().__init__()
+        cond_dim = cond_dim or input_dim
         self.norm = nn.LayerNorm(hidden_dim)
         self.layers = nn.ModuleList([])
 
@@ -222,8 +224,8 @@ class Transformer(nn.Module):
         )
 
         self.cond_proj = (
-            nn.Linear(input_dim, hidden_dim)
-            if input_dim != hidden_dim
+            nn.Linear(cond_dim, hidden_dim)
+            if cond_dim != hidden_dim
             else nn.Identity()
         )
 
@@ -292,6 +294,7 @@ class ARPredictor(nn.Module):
         dim_head=64,
         dropout=0.0,
         emb_dropout=0.0,
+        cond_dim=None,
     ):
         super().__init__()
         self.dropout = nn.Dropout(emb_dropout)
@@ -305,11 +308,12 @@ class ARPredictor(nn.Module):
             mlp_dim,
             dropout,
             block_class=ConditionalBlock,
+            cond_dim=cond_dim,
         )
 
     def forward(self, x, c):
         """
         x: (B, T, d) states, one token per frame (time positions by RoPE)
-        c: (B, T, act_dim) latent actions
+        c: (B, T, cond_dim) latent actions
         """
         return self.transformer(self.dropout(x), c)
