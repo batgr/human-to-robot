@@ -4,7 +4,7 @@ processed_dir: data/processed/
 fps: 4
 image_size: 224
 min_frames: 2
-clip_len: 5
+clip_len: 8   # frames per training clip, 2 s at 4 fps
 actions: false
 split_by: video
 

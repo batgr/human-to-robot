@@ -31,7 +31,7 @@ from h2r.models.module import SIGReg
 
 
 def build_loaders(cfg, device):
-    clip_len = cfg["context"] + cfg["rollout_steps"]
+    clip_len = cfg["data"]["clip_len"]
     root = cfg["data"]["processed_dir"]
     ds_train = ClipDataset(root, "train", clip_len)
     args = dict(
