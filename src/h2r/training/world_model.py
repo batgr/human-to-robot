@@ -54,36 +54,30 @@ def build_loaders(cfg, device):
     return train, val
 
 
-def build_optimizers(model, cfg):
-    """Muon for the 2D weights inside Transformer blocks, AdamW for the rest"""
+def build_optimizer(model, cfg):
+    """AdamW, no weight decay on biases, norms and embeddings"""
     optim = cfg["optim"]
-    muon, decay, no_decay = [], [], []
+    decay, no_decay = [], []
     for name, p in model.named_parameters():
         if not p.requires_grad:
             continue  # frozen encoder
-        if p.ndim == 2 and (".layers." in name or ".readout." in name):
-            muon.append(p)
-        elif p.ndim < 2 or name.endswith(
+        if p.ndim < 2 or name.endswith(
             ("pos_embedding", "query", "cls_token", "position_embeddings")
         ):
             no_decay.append(p)
         else:
             decay.append(p)
-    opts = [
-        torch.optim.Muon(muon, lr=optim["muon_lr"], weight_decay=optim["weight_decay"]),
-        torch.optim.AdamW(
-            [
-                {"params": decay, "weight_decay": optim["weight_decay"]},
-                {"params": no_decay, "weight_decay": 0.0},
-            ],
-            lr=optim["adamw_lr"],
-        ),
-    ]
+    opt = torch.optim.AdamW(
+        [
+            {"params": decay, "weight_decay": optim["weight_decay"]},
+            {"params": no_decay, "weight_decay": 0.0},
+        ],
+        lr=optim["lr"],
+    )
     schedule = warmup_cosine(
         int(optim["warmup"] * cfg["iterations"]), cfg["iterations"]
     )
-    scheds = [torch.optim.lr_scheduler.LambdaLR(o, schedule) for o in opts]
-    return opts, scheds
+    return opt, torch.optim.lr_scheduler.LambdaLR(opt, schedule)
 
 
 def trainable_state(model):
@@ -109,16 +103,14 @@ def train(cfg):
     model = build_model(cfg["model"]).to(device)
     sigreg = SIGReg().to(device)
     params = [p for p in model.parameters() if p.requires_grad]
-    opts, scheds = build_optimizers(model, cfg)
+    opt, sched = build_optimizer(model, cfg)
 
     start, best = 1, float("inf")  # best val/loss
     if cfg["resume"]:
         ckpt = torch.load(run_dir / "last.pt", map_location=device, weights_only=False)
         model.load_state_dict(ckpt["model"], strict=False)
-        for o, state in zip(opts, ckpt["opts"]):
-            o.load_state_dict(state)
-        for s, state in zip(scheds, ckpt["scheds"]):
-            s.load_state_dict(state)
+        opt.load_state_dict(ckpt["opt"])
+        sched.load_state_dict(ckpt["sched"])
         set_rng_state(ckpt["rng"])
         start, best = ckpt["step"] + 1, ckpt["best"]
         metrics_file = (
@@ -157,7 +149,7 @@ def train(cfg):
         clip = next(train_iter).to(device, non_blocking=True)
         data_time += time.time() - t
 
-        out = train_step(model, sigreg, clip, opts, scheds, params, cfg, autocast)
+        out = train_step(model, sigreg, clip, opt, sched, params, cfg, autocast)
         for k, v in out.items():
             sums[k] = sums.get(k, 0) + v.detach()
 
@@ -173,8 +165,7 @@ def train(cfg):
                 "loss/kl_weighted": cfg["loss"]["beta"]
                 * m["kl"],  # weighted terms: their real share of the loss
                 "loss/sigreg_weighted": cfg["loss"]["sigreg"] * m["sigreg"],
-                "optim/lr_muon": scheds[0].get_last_lr()[0],
-                "optim/lr_adamw": scheds[1].get_last_lr()[0],
+                "optim/lr": sched.get_last_lr()[0],
                 **{f"optim/{k}": v for k, v in m.items() if k.startswith("gnorm")},
                 "system/clips_per_s": n * cfg["batch_size"] / elapsed,
                 "system/step_s": elapsed / n,
@@ -200,8 +191,8 @@ def train(cfg):
             save_checkpoint(
                 run_dir / "last.pt",
                 model=trainable_state(model),
-                opts=[o.state_dict() for o in opts],
-                scheds=[s.state_dict() for s in scheds],
+                opt=opt.state_dict(),
+                sched=sched.state_dict(),
                 step=step,
                 best=best,
                 rng=rng_state(),
@@ -246,20 +237,18 @@ def evaluate(model, sigreg, loader, cfg, device, autocast):
     return metrics
 
 
-def train_step(model, sigreg, clip, opts, scheds, params, cfg, autocast):
+def train_step(model, sigreg, clip, opt, sched, params, cfg, autocast):
 
     with autocast:
         out = losses(model, sigreg, model.encode(clip), cfg)
-    for o in opts:
-        o.zero_grad(set_to_none=True)
+    opt.zero_grad(set_to_none=True)
     out["loss"].backward()
     out |= grad_norms(model)
     out["gnorm"] = torch.nn.utils.clip_grad_norm_(
         params, cfg["optim"]["grad_clip"]
     )  # norm before clipping
-    for o, s in zip(opts, scheds):
-        o.step()
-        s.step()
+    opt.step()
+    sched.step()
     return out
 
 

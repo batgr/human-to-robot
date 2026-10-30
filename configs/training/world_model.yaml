@@ -18,9 +18,8 @@ iterations: 1000
 log_every: 25
 
 optim:
-  muon_lr: 0.02
-  adamw_lr: 0.00022
-  weight_decay: 0.04
+  lr: 0.00005   # AdamW, LeWM (batch 128)
+  weight_decay: 0.001
   warmup: 0.1
   grad_clip: 1.0
 
