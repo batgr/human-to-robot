@@ -11,7 +11,7 @@ from torch import nn
 
 from h2r.models.encoder import FrozenEncoder, ViTEncoder
 from h2r.models.idm import IDM
-from h2r.models.module import MLP, ARPredictor, PatchProjector
+from h2r.models.module import MLP, ARPredictor
 
 
 class JEPA(nn.Module):
@@ -35,26 +35,26 @@ class JEPA(nn.Module):
     def encode(self, pixels):
         """Encode observations into embeddings.
         pixels: (B, T, 3, H, W) in [0, 255]
-        returns emb: (B, T, N, D)
+        returns emb: (B, T, D)
         """
 
         pixels = pixels.float()
         b = pixels.size(0)
         pixels = rearrange(pixels, "b t ... -> (b t) ...")  # flatten for encoding
         output = self.encoder(pixels, interpolate_pos_encoding=True)
-        pixels_emb = output.last_hidden_state[:, 1:]  # patch tokens (drop cls)
-        emb = self.projector(pixels_emb)  # (B*T, N, D)
-        return rearrange(emb, "(b t) n d -> b t n d", b=b)
+        pixels_emb = output.last_hidden_state[:, 0]  # cls token
+        emb = self.projector(pixels_emb)  # (B*T, D)
+        return rearrange(emb, "(b t) d -> b t d", b=b)
 
     def predict(self, emb, z):
         """Predict next state embedding
-        emb: (B, T, N, D)
+        emb: (B, T, D)
         z: (B, T, D) latent actions
         """
         b, t = emb.shape[:2]
         preds = self.predictor(emb, z)
-        preds = self.pred_proj(rearrange(preds, "b t n d -> (b t n) d"))
-        preds = rearrange(preds, "(b t n) d -> b t n d", b=b, t=t)
+        preds = self.pred_proj(rearrange(preds, "b t d -> (b t) d"))
+        preds = rearrange(preds, "(b t) d -> b t d", b=b, t=t)
         return preds
 
     ####################
@@ -64,14 +64,14 @@ class JEPA(nn.Module):
     @torch.no_grad()
     def rollout(self, emb, latents, actions, controller=None, history_size=3):
         """Imagine the future of real action sequences, the controller in the loop (Garrido et al. 2026, eq. 2)
-        emb: (B, C, N, D) context states, the last one is the current state
+        emb: (B, C, D) context states, the last one is the current state
         latents: (B, C - 1, D) latent actions linking the context states
         actions: (B, S, H, act_dim) S sequences of H real actions, or of H latent actions when there is
             no controller (e.g. the IDM's, to evaluate the predictor alone)
-        returns the predicted states (B, S, H, N, D)
+        returns the predicted states (B, S, H, D)
         """
         b, s, h = actions.shape[:3]
-        emb = emb[:, None].expand(-1, s, -1, -1, -1).flatten(0, 1)  # (B*S, C, N, D)
+        emb = emb[:, None].expand(-1, s, -1, -1).flatten(0, 1)  # (B*S, C, D)
         z = latents[:, None].expand(-1, s, -1, -1).flatten(0, 1)  # (B*S, C - 1, D)
         actions = actions.flatten(0, 1)
         for i in range(h):
@@ -95,7 +95,7 @@ def build_model(cfg):
         encoder,
         ARPredictor(**cfg["predictor"]),
         IDM(**cfg["idm"]),
-        PatchProjector(input_dim=enc["dim"], **cfg["projector"]),
+        MLP(input_dim=enc["dim"], **cfg["projector"]),
         MLP(**cfg["pred_proj"]),
     )
 

@@ -268,11 +268,11 @@ def losses(model, sigreg, emb, cfg):
     sig_w = cfg["loss"]["sigreg"]
     z, kl = model.idm(emb)  # (B, T-1, D), one latent action per transition
 
-    pred = model.predict(emb[:, :-1], z)  # (B, T-1, N, D)
+    pred = model.predict(emb[:, :-1], z)  # (B, T-1, D)
 
     tf = F.mse_loss(pred.float(), emb[:, 1:].float())  # every transition of the clip
 
-    sig = sigreg(rearrange(emb.float(), "b t n d -> (t n) b d"))
+    sig = sigreg(rearrange(emb.float(), "b t d -> t b d"))
 
     loss = tf + (beta * kl) + (sig_w * sig)
 

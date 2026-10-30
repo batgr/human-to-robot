@@ -1,14 +1,12 @@
 embed_dim: &D 128
-num_patches: &N 16
 
 encoder: configs/models/encoders/vit_tiny.yaml   # or dinov2_small.yaml (frozen)
 
-projector:   # input_dim: the encoder dim
-  hidden_dim: 192
+projector:   # MLP on the encoder's CLS token, input_dim: the encoder dim
+  hidden_dim: 512
   output_dim: *D
 
 predictor:
-  num_patches: *N
   input_dim: *D
   hidden_dim: *D
   depth: 6
@@ -24,7 +22,6 @@ pred_proj:
   output_dim: *D
 
 idm:
-  num_patches: *N
   dim: *D
   depth: 2
   heads: 4

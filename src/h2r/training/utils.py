@@ -106,7 +106,7 @@ def log(run_dir, step, metrics, wandb_run=None):
         "loss/total_val",
         "prediction/tf",
         "prediction/persistence",
-        "representation/rankme_token",
+        "representation/rankme",
         "representation/temporal_change",
         "latent_action/active_dims",
         "latent_action/controllability",
