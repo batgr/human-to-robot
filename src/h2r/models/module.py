@@ -3,7 +3,7 @@
 import torch
 from torch import nn
 import torch.nn.functional as F
-from einops import rearrange
+from einops import rearrange, repeat
 
 
 def modulate(x, shift, scale):
@@ -90,17 +90,18 @@ class Attention(nn.Module):
             else nn.Identity()
         )
 
-    def forward(self, x, causal=True):
+    def forward(self, x, causal=True, frame_size=1):
         """
-        x : (B, T, D), one token per frame
+        x : (B, L, D), L = T * frame_size tokens (frame_size tokens per frame)
         """
         x = self.norm(x)
         drop = self.dropout if self.training else 0.0
-        qkv = self.to_qkv(x).chunk(3, dim=-1)  # q, k, v: (B, heads, T, dim_head)
+        qkv = self.to_qkv(x).chunk(3, dim=-1)  # q, k, v: (B, heads, L, dim_head)
         q, k, v = (rearrange(t, "b t (h d) -> b h t d", h=self.heads) for t in qkv)
-        pos = torch.arange(x.size(1), device=x.device)
-        q, k = rope(q, pos), rope(k, pos)
-        out = F.scaled_dot_product_attention(q, k, v, is_causal=causal, dropout_p=drop)
+        frame = torch.arange(x.size(1), device=x.device) // frame_size  # frame index per token
+        q, k = rope(q, frame), rope(k, frame)
+        mask = frame[:, None] >= frame[None, :] if causal else None  # see all tokens of past frames
+        out = F.scaled_dot_product_attention(q, k, v, attn_mask=mask, dropout_p=drop)
         out = rearrange(out, "b h t d -> b t (h d)")
         return self.to_out(out)
 
@@ -119,10 +120,10 @@ class CrossAttention(nn.Module):
         self.to_kv = nn.Linear(dim, inner_dim * 2, bias=False)
         self.to_out = nn.Sequential(nn.Linear(inner_dim, dim), nn.Dropout(dropout))
 
-    def forward(self, x, context):
+    def forward(self, x, context, frame_size=1):
         """
         x : (B, Lq, D) queries, placed right after the last context frame
-        context : (B, T, D), one token per frame
+        context : (B, L, D), frame_size tokens per frame
         """
         drop = self.dropout if self.training else 0.0
         q = self.to_q(self.norm_q(x))
@@ -130,9 +131,9 @@ class CrossAttention(nn.Module):
         q, k, v = (
             rearrange(t, "b t (h d) -> b h t d", h=self.heads) for t in (q, k, v)
         )
-        pos = torch.arange(context.size(1), device=x.device)
-        q_pos = pos.new_full((x.size(1),), context.size(1))  # queries come after the context
-        q, k = rope(q, q_pos), rope(k, pos)
+        frame = torch.arange(context.size(1), device=x.device) // frame_size  # frame index per context token
+        q_frame = frame.new_full((x.size(1),), context.size(1) // frame_size)  # queries come after the context
+        q, k = rope(q, q_frame), rope(k, frame)
         out = F.scaled_dot_product_attention(q, k, v, dropout_p=drop)
         out = rearrange(out, "b h t d -> b t (h d)")
         return self.to_out(out)
@@ -155,11 +156,13 @@ class ConditionalBlock(nn.Module):
         nn.init.constant_(self.adaLN_modulation[-1].weight, 0)
         nn.init.constant_(self.adaLN_modulation[-1].bias, 0)
 
-    def forward(self, x, c):
+    def forward(self, x, c, frame_size=1):
         shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = (
             self.adaLN_modulation(c).chunk(6, dim=-1)
         )
-        x = x + gate_msa * self.attn(modulate(self.norm1(x), shift_msa, scale_msa))
+        x = x + gate_msa * self.attn(
+            modulate(self.norm1(x), shift_msa, scale_msa), frame_size=frame_size
+        )
         x = x + gate_mlp * self.mlp(modulate(self.norm2(x), shift_mlp, scale_mlp))
         return x
 
@@ -175,8 +178,8 @@ class Block(nn.Module):
         self.norm1 = nn.LayerNorm(dim, elementwise_affine=False, eps=1e-6)
         self.norm2 = nn.LayerNorm(dim, elementwise_affine=False, eps=1e-6)
 
-    def forward(self, x, causal=True):
-        x = x + self.attn(self.norm1(x), causal=causal)
+    def forward(self, x, causal=True, frame_size=1):
+        x = x + self.attn(self.norm1(x), causal=causal, frame_size=frame_size)
         x = x + self.mlp(self.norm2(x))
         return x
 
@@ -190,8 +193,8 @@ class CrossBlock(nn.Module):
         self.attn = CrossAttention(dim, heads=heads, dim_head=dim_head, dropout=dropout)
         self.mlp = FeedForward(dim, mlp_dim, dropout=dropout)
 
-    def forward(self, x, context):
-        x = x + self.attn(x, context)
+    def forward(self, x, context, frame_size=1):
+        x = x + self.attn(x, context, frame_size=frame_size)
         x = x + self.mlp(x)
         return x
 
@@ -243,12 +246,16 @@ class Transformer(nn.Module):
             block_class is ConditionalBlock
         )  # AdaLN blocks read c, the others a causal flag
 
-    def forward(self, x, c=None, causal=True):
+    def forward(self, x, c=None, causal=True, frame_size=1):
         x = self.input_proj(x)
         if self.conditional:
             c = self.cond_proj(c)
         for block in self.layers:
-            x = block(x, c) if self.conditional else block(x, causal)
+            x = (
+                block(x, c, frame_size)
+                if self.conditional
+                else block(x, causal, frame_size)
+            )
         return self.output_proj(self.norm(x))
 
 
@@ -279,6 +286,31 @@ class MLP(nn.Module):
         return self.net(x)
 
 
+class PatchProjector(nn.Module):
+    """Compress the encoder patch grid: 16x fewer patches (two stride-2 convs, 16 x 16 -> 4 x 4 at 224 px, as in
+    AD-E2E-JEPA), then average pooled to num_patches tokens if fewer (4: a 2 x 2 grid). BatchNorm on the hidden
+    layer as in the LeWM projector"""
+
+    def __init__(self, input_dim, hidden_dim, output_dim, num_patches=16):
+        super().__init__()
+        self.grid = int(num_patches**0.5)
+        self.net = nn.Sequential(
+            nn.Conv2d(input_dim, hidden_dim, kernel_size=2, stride=2),
+            nn.BatchNorm2d(hidden_dim),
+            nn.GELU(),
+            nn.Conv2d(hidden_dim, output_dim, kernel_size=2, stride=2),
+        )
+
+    def forward(self, x):
+        """
+        x: (B*T, N, D) patch tokens of a square grid, without CLS
+        """
+        h = int(x.size(1) ** 0.5)
+        x = rearrange(x, "b (h w) d -> b d h w", h=h)
+        x = F.adaptive_avg_pool2d(self.net(x), self.grid)
+        return rearrange(x, "b d h w -> b (h w) d")
+
+
 class ARPredictor(nn.Module):
     """Autoregressive predictor for next-step embedding prediction."""
 
@@ -295,8 +327,14 @@ class ARPredictor(nn.Module):
         dropout=0.0,
         emb_dropout=0.0,
         cond_dim=None,
+        num_patches=1,
     ):
         super().__init__()
+        self.pos_embedding = (
+            nn.Parameter(torch.randn(1, 1, num_patches, input_dim))
+            if num_patches > 1
+            else None
+        )  # position in the image, when a state is a grid of tokens
         self.dropout = nn.Dropout(emb_dropout)
         self.transformer = Transformer(
             input_dim,
@@ -313,7 +351,13 @@ class ARPredictor(nn.Module):
 
     def forward(self, x, c):
         """
-        x: (B, T, d) states, one token per frame (time positions by RoPE)
+        x: (B, T, d) states of one token, or (B, T, N, d) of N tokens (time positions by RoPE)
         c: (B, T, cond_dim) latent actions
         """
-        return self.transformer(self.dropout(x), c)
+        if x.dim() == 3:
+            return self.transformer(self.dropout(x), c)
+        n = x.size(2)
+        x = rearrange(x + self.pos_embedding, "b t n d -> b (t n) d")
+        c = repeat(c, "b t d -> b (t n) d", n=n)  # same action for every token of a frame
+        x = self.transformer(self.dropout(x), c, frame_size=n)
+        return rearrange(x, "b (t n) d -> b t n d", n=n)

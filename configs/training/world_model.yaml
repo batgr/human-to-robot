@@ -6,7 +6,7 @@ output_dir: outputs
 precision: bf16
 batch_size: 128
 num_workers: 4
-overfit_batches: 0   # > 0: train and validate on these first batches only
+overfit_batches: 0 # > 0: train and validate on these first batches only
 
 loss:
   beta: 0.001
@@ -16,7 +16,7 @@ iterations: 1000
 log_every: 25
 
 optim:
-  lr: 0.00005   # AdamW, LeWM (batch 128)
+  lr: 0.00005 # AdamW, LeWM (batch 128)
   weight_decay: 0.001
   warmup: 0.1
   grad_clip: 1.0
@@ -27,4 +27,4 @@ wandb:
 
 eval_every: 250
 
-resume: null   # run directory to resume from its last.pt, with its saved config
+resume: null

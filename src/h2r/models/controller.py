@@ -46,7 +46,7 @@ class Controller(nn.Module):
     def forward(self, action, emb):
         """
         action: (..., act_dim) real actions, in the dataset's units
-        emb: (..., D) state of the frame the action starts from
+        emb: (..., D) state of the frame the action starts from (its N tokens flattened: N * D)
         returns z_hat: (..., z_dim)
         """
         a = (action - self.act_mean) / self.act_std
@@ -56,7 +56,8 @@ class Controller(nn.Module):
 def build_controller(cfg, wm_cfg):
     """The controller's dimensions come from the world model, the rest from its own config"""
     idm = wm_cfg["model"]["idm"]
-    return Controller(dim=idm["dim"], z_dim=idm.get("z_dim"), **cfg)
+    dim = idm["dim"] * wm_cfg["model"].get("num_patches", 1)  # the state, its tokens flattened
+    return Controller(dim=dim, z_dim=idm.get("z_dim"), **cfg)
 
 
 def load_controller(run_dir, device):

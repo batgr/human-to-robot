@@ -33,7 +33,7 @@ class LatentActions:
         self.err = self.err_other = self.err_last = self.err_cut = self.err_cycle = 0.0
 
     def update(self, model, emb, z, pred, kl):
-        """emb: (B, T, D), z: (B, T-1, D) mu of the IDM, pred: (B, T-1, D) = predict(emb[:, :-1], z)"""
+        """emb: (B, T, D) or (B, T, N, D), z: (B, T-1, z_dim) mu of the IDM, pred = predict(emb[:, :-1], z)"""
         b, target = len(emb), emb[:, 1:]
         self.mu.update(z.flatten(0, 1))
         self.kl += kl.float() * b
@@ -50,7 +50,7 @@ class LatentActions:
         pred_b = model.predict(clip_b[:, :-1], z)  # A's actions on B
         pairs = torch.stack([clip_b[:, :-1], pred_b], dim=2).flatten(
             0, 1
-        )  # (B * (T-1), 2, D)
+        )  # (B * (T-1), 2, D) or (B * (T-1), 2, N, D)
         z_back, _ = model.idm(pairs)  # (B * (T-1), 1, z_dim)
         pred_a = model.predict(emb[:, :-1], z_back.view_as(z))
         self.err_cycle += mse(pred_a, target) * b

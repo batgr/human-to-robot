@@ -15,13 +15,13 @@ class PredictionQuality:
         self.n, self.err, self.persistence = 0, 0.0, 0.0
 
     def update(self, emb, pred):
-        """emb: (B, T, D) states, pred: (B, T-1, D) predictions of emb[:, 1:]"""
+        """emb: (B, T, D) or (B, T, N, D) states, pred: predictions of emb[:, 1:]"""
         b = len(emb)
         target = emb[:, 1:].float()
         self.err += (pred.float() - target).pow(2).mean() * b
         self.persistence += (emb[:, :-1].float() - target).pow(2).mean() * b
-        self.preds.update(pred.flatten(0, 1))
-        self.targets.update(target.flatten(0, 1))
+        self.preds.update(pred.flatten(0, -2))
+        self.targets.update(target.flatten(0, -2))
         self.n += b
 
     def compute(self):

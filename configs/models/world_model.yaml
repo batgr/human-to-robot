@@ -1,9 +1,10 @@
 embed_dim: &D 192 # LeWM dims (config/train/model/lewm.yaml)
 latent_action_dim: &Z 64 # z < D: a bottleneck on top of the KL (Garrido et al.: 128 for V-JEPA 2-L states)
+num_patches: 1 # tokens per state: 1 = MLP on the CLS token (LeWM), 16 = patch projector (4 x 4 grid), 4 = its 2 x 2 pooling
 
 encoder: configs/models/encoders/vit_tiny.yaml # or dinov2_small.yaml (frozen)
 
-projector: # MLP on the encoder's CLS token, input_dim: the encoder dim
+projector: # MLP on the encoder's CLS token or patch projector, input_dim: the encoder dim
   hidden_dim: 2048
   output_dim: *D
 

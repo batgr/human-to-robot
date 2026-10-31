@@ -255,13 +255,13 @@ def train_step(model, sigreg, clip, opt, sched, params, cfg, autocast):
 def losses(model, sigreg, emb, cfg):
     beta = cfg["loss"]["beta"]
     sig_w = cfg["loss"]["sigreg"]
-    z, kl = model.idm(emb)  # (B, T-1, D), one latent action per transition
+    z, kl = model.idm(emb)  # (B, T-1, z_dim), one latent action per transition
 
-    pred = model.predict(emb[:, :-1], z)  # (B, T-1, D)
+    pred = model.predict(emb[:, :-1], z)  # (B, T-1, D) or (B, T-1, N, D)
 
     tf = F.mse_loss(pred.float(), emb[:, 1:].float())  # every transition of the clip
 
-    sig = sigreg(rearrange(emb.float(), "b t d -> t b d"))
+    sig = sigreg(rearrange(emb.float(), "b t ... d -> (t ...) b d"))  # per frame (and token) across clips
 
     loss = tf + (beta * kl) + (sig_w * sig)
 
