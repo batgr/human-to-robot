@@ -9,7 +9,7 @@ num_workers: 4
 overfit_batches: 0 # > 0: train and validate on these first batches only
 
 loss:
-  beta: 0.001
+  beta: 0.0001 # 1e-3 starved z (diagnostics E3): tf/pers 0.75 -> 0.40, z carries motion, not the next frame
   sigreg: 0.09
 
 iterations: 1000
