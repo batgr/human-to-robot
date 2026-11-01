@@ -1,7 +1,7 @@
 embed_dim: &D 192 # LeWM dims (config/train/model/lewm.yaml)
 latent_action_dim: &Z 64 # z < D: a bottleneck on top of the KL (Garrido et al.: 128 for V-JEPA 2-L states)
 num_patches: 1 # tokens per state: 1 = MLP on the CLS token (LeWM), 16 = patch projector (4 x 4 grid), 4 = its 2 x 2 pooling
-history_size: 3 # states the predictor sees when unrolling (rollout, planning); to test. Train context must be >= it (Terver et al. 2025)
+history_size: 2 # W_p: states the predictor sees when unrolling at planning time and in the rollout metrics (Terver et al. 2025: 2); W_p <= W
 
 encoder: configs/models/encoders/vit_tiny.yaml # or dinov2_small.yaml (frozen)
 
