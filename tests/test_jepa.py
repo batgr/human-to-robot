@@ -21,7 +21,7 @@ def test_rollout_without_controller_takes_latent_actions():
     """JEPA.rollout(controller=None) unrolls the given latent actions, as a loop over predict"""
     model, D = small_model()
     emb, z = torch.randn(2, 3, D), torch.randn(2, 5, D)
-    out = model.rollout(emb, z[:, :2], z[:, 2:][:, None], history_size=3)[:, 0]
+    out = model.rollout(emb, z[:, :2], z[:, 2:][:, None])[:, 0]  # history_size 3 by default
     ctx = emb
     for h in range(3):
         nxt = model.predict(ctx[:, -3:], z[:, h : h + 3])[:, -1:]

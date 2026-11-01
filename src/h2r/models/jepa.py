@@ -23,9 +23,11 @@ class JEPA(nn.Module):
         idm,
         projector=None,
         pred_proj=None,
+        history_size=3,
     ):
         super().__init__()
 
+        self.history_size = history_size  # states seen by the predictor when unrolling
         self.encoder = encoder
         self.predictor = predictor
         self.idm = idm  # latent actions, fed directly to the predictor
@@ -61,7 +63,7 @@ class JEPA(nn.Module):
     ####################
 
     @torch.no_grad()
-    def rollout(self, emb, latents, actions, controller=None, history_size=3):
+    def rollout(self, emb, latents, actions, controller=None):
         """Imagine the future of real action sequences, the controller in the loop (Garrido et al. 2026, eq. 2)
         emb: (B, C, D) or (B, C, N, D) context states, the last one is the current state
         latents: (B, C - 1, z_dim) latent actions linking the context states
@@ -81,7 +83,8 @@ class JEPA(nn.Module):
                 else actions[:, i]
             )
             z = torch.cat([z, step[:, None]], dim=1)
-            pred = self.predict(emb[:, -history_size:], z[:, -history_size:])[:, -1:]
+            k = self.history_size
+            pred = self.predict(emb[:, -k:], z[:, -k:])[:, -1:]
             emb = torch.cat([emb, pred], dim=1)
         return emb[:, -h:].unflatten(0, (b, s))
 
@@ -104,6 +107,7 @@ def build_model(cfg):
         IDM(num_patches=n, **cfg["idm"]),
         projector,
         MLP(**cfg["pred_proj"]),
+        history_size=cfg.get("history_size", 3),  # runs saved before the key: 3
     )
 
 
