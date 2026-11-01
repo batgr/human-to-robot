@@ -92,29 +92,19 @@ def grad_norms(model):
 
 def log(run_dir, step, metrics, wandb_run=None):
     """One line in run_dir/metrics.jsonl, the same metrics to W&B if enabled (one section per category,
-    the prefix before "/"), a short print"""
+    the prefix before "/"), and every metric printed, one line per section"""
     metrics = {k: round(v, 6) for k, v in metrics.items() if v is not None}
     with open(run_dir / "metrics.jsonl", "a") as f:
         f.write(json.dumps({"step": step} | metrics) + "\n")
     if wandb_run is not None:
         wandb_run.log(metrics, step=step)
-    keys = [
-        "loss/total",
-        "loss/tf",
-        "optim/gnorm",
-        "system/clips_per_s",
-        "loss/total_val",
-        "prediction/tf",
-        "prediction/persistence",
-        "representation/rankme",
-        "representation/temporal_change",
-        "latent_action/active_dims",
-        "latent_action/controllability",
-    ]
-    print(
-        f"step {step} | "
-        + " | ".join(f"{k} {metrics[k]:.4g}" for k in keys if k in metrics)
-    )
+    sections = {}
+    for key, value in metrics.items():
+        section, _, name = key.partition("/")
+        sections.setdefault(section, []).append(f"{name} {value:.4g}")
+    print(f"step {step}")
+    for section, items in sections.items():
+        print(f"  {section:<15}" + " | ".join(items))
 
 
 def rng_state():
