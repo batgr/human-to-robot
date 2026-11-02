@@ -23,7 +23,12 @@ GROUPS = {
             "h2r.training.world_model:train",
             "configs/training/world_model.yaml",
             "",
-        )
+        ),
+        "controller": (
+            "h2r.training.controller:train",
+            "configs/training/controller.yaml",
+            "real action + state -> latent action, for a trained world model",
+        ),
     },
 }
 

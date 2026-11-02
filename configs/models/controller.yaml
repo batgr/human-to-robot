@@ -1,2 +1,3 @@
-act_dim: 7
+act_dim: 7 # end-effector deltas: xyz, roll / pitch / yaw, gripper (V-JEPA 2-AC)
 depth: 2
+mlp_dim: 1024 # fixed: 4 x the state would be 12k wide on 16 patch tokens (16 x 192 inputs)

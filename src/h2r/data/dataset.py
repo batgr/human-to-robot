@@ -19,6 +19,32 @@ def shards(root, split):
     return sorted(Path(root, "frames").glob(f"{split}-*.parquet"))
 
 
+def download(repo, root):
+    """Frame shards of a Hub dataset into root, once (the raw videos and simulator states stay on the Hub)"""
+    if not shards(root, "train"):
+        from huggingface_hub import snapshot_download
+
+        snapshot_download(repo, repo_type="dataset", local_dir=root,
+                          allow_patterns=["frames/*", "manifest.parquet", "config.yaml"])
+
+
+def read_episodes(root, split):
+    """Videos of a split that have actions: [{"video", "frames": JPEG bytes, "actions": (T - 1, act_dim)}]"""
+    rows = [
+        row
+        for p in shards(root, split)
+        for row in pq.read_table(p, columns=["video", "frames", "actions"]).to_pylist()
+    ]
+    return [r for r in rows if r["actions"] is not None]
+
+
+def windows(episodes, horizon):
+    """Non-overlapping windows of horizon + 1 states of every episode, as many as fit. episodes: {"s": (E, T, ...)
+    states, and per transition (E, T - 1, ...) e.g. "a", "mu"} -> s (W, horizon + 1, ...), the others (W, horizon, ...)"""
+    starts = range(0, episodes["s"].size(1) - horizon, horizon)
+    return {k: torch.cat([v[:, t : t + horizon + (k == "s")] for t in starts]) for k, v in episodes.items()}
+
+
 class ClipDataset(Dataset):
 
     def __init__(self, root, split, clip_len=5):
