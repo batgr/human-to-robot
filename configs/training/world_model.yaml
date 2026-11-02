@@ -28,5 +28,7 @@ wandb:
   project: h2r
 
 eval_every: 250
+best_metric: prediction/tf_over_persistence # best.pt = its lowest validation value. Not loss/total_val: SIGReg weighs
+  # as much as tf in it, and tf alone falls when the encoder erases the motion; the ratio rewards a leak (watch latent_action/leak)
 
 resume: null

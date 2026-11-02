@@ -108,7 +108,8 @@ def train(cfg):
     params = [p for p in model.parameters() if p.requires_grad]
     opt, sched = build_optimizer(model, cfg)
 
-    start, best = 1, float("inf")  # best val/loss
+    best_metric = cfg.get("best_metric", "loss/total_val")  # runs saved before the key: the validation loss
+    start, best = 1, float("inf")  # lowest best_metric so far
     if cfg["resume"]:
         ckpt = torch.load(run_dir / "last.pt", map_location=device, weights_only=False)
         model.load_state_dict(ckpt["model"], strict=False)
@@ -179,13 +180,13 @@ def train(cfg):
                 metrics = evaluate(model, sigreg, val_loader, cfg, device, autocast)
                 metrics["prediction/tf_over_persistence_train"] = train_fit(model, train_probe, device, autocast)
                 log(run_dir, step, metrics, wandb_run)
-                if metrics["loss/total_val"] < best:
-                    best = metrics["loss/total_val"]
+                if metrics[best_metric] < best:
+                    best = metrics[best_metric]
                     save_checkpoint(
                         run_dir / "best.pt",
                         model=trainable_state(model),
                         step=step,
-                        val_loss=best,
+                        **{best_metric: best},
                     )
             save_checkpoint(
                 run_dir / "last.pt",
