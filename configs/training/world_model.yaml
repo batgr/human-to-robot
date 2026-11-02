@@ -11,14 +11,14 @@ overfit_batches: 0 # > 0: train and validate on these first batches only
 loss:
   beta: 0.0001 # 1e-3 starved z (diagnostics E3): tf/pers 0.75 -> 0.40, z carries motion, not the next frame
   sigreg: 0.09
-  rollout_steps: 2 # K, k-step loss of JEPA-WM: tf + L_2 + ... + L_K (best: 2, last-gradient only); 1 = teacher forcing only
+  rollout_steps: 1 # K, k-step loss of JEPA-WM: tf + L_2 + ... + L_K (their best: 2, last-gradient only); 1 = teacher forcing only (diagnostics E8: K = 2 makes z leak the next frame, 1 % -> 66 %)
   rollout_window: 3 # W_t: states the predictor sees in the rollout steps k > 1 (Terver et al. 2025: 3); W_t < clip_len
 
 iterations: 1000
 log_every: 25
 
 optim:
-  lr: 0.00005 # AdamW, LeWM (batch 128)
+  lr: 0.0001 # AdamW at batch 128 (LeWM: 5e-5); every diagnostics run E1-E12 used 1e-4
   weight_decay: 0.001
   warmup: 0.1
   grad_clip: 1.0

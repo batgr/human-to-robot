@@ -43,6 +43,13 @@ class IDM(nn.Module):
         emb: (B, T, D) states of one token, or (B, T, N, D) of N tokens
         returns z: (B, T-1, z_dim), kl: scalar
         """
+        mu, logvar = self.posterior(emb)
+        z = mu + torch.randn_like(mu) * (0.5 * logvar).exp() if self.training else mu
+        kl = 0.5 * (mu.pow(2) + logvar.exp() - 1 - logvar).sum(-1).mean()
+        return z, kl
+
+    def posterior(self, emb):
+        """mu, logvar of the latent action of each transition: (B, T-1, z_dim) each"""
         b = emb.size(0)
         x = emb[:, :, None] if emb.dim() == 3 else emb + self.pos_embedding  # (B, T, N, D)
         n = x.size(2)
@@ -54,6 +61,4 @@ class IDM(nn.Module):
 
         mu, logvar = self.head(self.norm(h)).chunk(2, dim=-1)
         logvar = logvar.clamp(-10, 10)
-        z = mu + torch.randn_like(mu) * (0.5 * logvar).exp() if self.training else mu
-        kl = 0.5 * (mu.pow(2) + logvar.exp() - 1 - logvar).sum(-1).mean()
-        return rearrange(z, "(b t) d -> b t d", b=b), kl
+        return tuple(rearrange(v, "(b t) d -> b t d", b=b) for v in (mu, logvar))

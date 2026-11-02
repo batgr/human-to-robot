@@ -55,6 +55,16 @@ def make_run_dir(cfg):
     return run_dir
 
 
+def init_wandb(cfg, run_dir):
+    """W&B run named after the run directory, None when disabled"""
+    if not cfg["wandb"]["enabled"]:
+        return None
+    import wandb
+
+    return wandb.init(project=cfg["wandb"]["project"], name=run_dir.name, id=run_dir.name,
+                      resume="allow", config=cfg, dir=run_dir)
+
+
 def forever(loader):
     """restarts the loader at the end of each epoch"""
     while True:
@@ -88,6 +98,17 @@ def grad_norms(model):
         if grads:
             norms[f"gnorm_{name}"] = torch.stack(grads).norm()
     return norms
+
+
+def update_ratios(model, before):
+    """log10 of std(update) / std(weight) for one optimizer step, median over the weight matrices of each top-level
+    module (cs231n: about -3; far below, the module no longer learns). before: the matrices before the step"""
+    ratios = {}
+    for name, p in model.named_parameters():
+        if name in before and before[name].float().std() > 0:
+            r = (p.detach() - before[name]).float().std() / before[name].float().std()
+            ratios.setdefault(name.split(".")[0], []).append(r.clamp_min(1e-12).log10().item())
+    return {f"update_ratio_{k}": float(np.median(v)) for k, v in ratios.items()}
 
 
 def log(run_dir, step, metrics, wandb_run=None):

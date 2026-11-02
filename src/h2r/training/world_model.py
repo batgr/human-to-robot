@@ -6,10 +6,11 @@ from einops import rearrange
 from torch.utils.data import DataLoader
 from h2r.data.dataset import ClipDataset, shards
 from h2r.metrics.latent_actions import LatentActions
-from h2r.metrics.prediction import PredictionQuality, RolloutError
+from h2r.metrics.prediction import PredictionQuality, PredictorInternals, RolloutError
 from h2r.metrics.representation import RepresentationHealth
 from h2r.training.utils import (
     grad_norms,
+    init_wandb,
     pick_device,
     seed_everything,
     make_autocast,
@@ -21,6 +22,7 @@ from h2r.training.utils import (
     rng_state,
     set_rng_state,
     save_checkpoint,
+    update_ratios,
 )
 import json
 import time
@@ -99,6 +101,7 @@ def train(cfg):
 
     train_loader, val_loader = build_loaders(cfg, device)
     train_iter = forever(train_loader)
+    train_probe = list(itertools.islice(train_loader, 2))  # fixed training clips, for the overfitting gap
 
     model = build_model(cfg["model"]).to(device)
     sigreg = SIGReg().to(device)
@@ -127,18 +130,7 @@ def train(cfg):
         f"run: {run_dir} | device: {device} | trainable params: {sum(p.numel() for p in params)}"
     )
 
-    wandb_run = None
-    if cfg["wandb"]["enabled"]:
-        import wandb
-
-        wandb_run = wandb.init(
-            project=cfg["wandb"]["project"],
-            name=run_dir.name,
-            id=run_dir.name,
-            resume="allow",
-            config=cfg,
-            dir=run_dir,
-        )
+    wandb_run = init_wandb(cfg, run_dir)
 
     model.train()
     sums, data_time, t0 = {}, 0.0, time.time()
@@ -149,11 +141,14 @@ def train(cfg):
         clip = next(train_iter).to(device, non_blocking=True)
         data_time += time.time() - t
 
+        logging = step % cfg["log_every"] == 0
+        if logging:  # the weight matrices before the step, for the update ratios
+            before = {n: p.detach().clone() for n, p in model.named_parameters() if p.requires_grad and p.ndim == 2}
         out = train_step(model, sigreg, clip, opt, sched, params, cfg, autocast)
         for k, v in out.items():
             sums[k] = sums.get(k, 0) + v.detach()
 
-        if step % cfg["log_every"] == 0:
+        if logging:
             n = cfg["log_every"]
             m = {k: v.item() / n for k, v in sums.items()}
             elapsed = time.time() - t0
@@ -168,6 +163,8 @@ def train(cfg):
                 **{f"loss/{k}": v for k, v in m.items() if k.startswith("rollout")},
                 "optim/lr": sched.get_last_lr()[0],
                 **{f"optim/{k}": v for k, v in m.items() if k.startswith("gnorm")},
+                "optim/clipped": m["clipped"],  # share of the steps whose gradient was clipped
+                **{f"optim/{k}": v for k, v in update_ratios(model, before).items()},
                 "system/clips_per_s": n * cfg["batch_size"] / elapsed,
                 "system/step_s": elapsed / n,
                 "system/data_s": data_time / n,
@@ -180,6 +177,7 @@ def train(cfg):
             t_eval = time.time()
             if val_loader is not None:
                 metrics = evaluate(model, sigreg, val_loader, cfg, device, autocast)
+                metrics["prediction/tf_over_persistence_train"] = train_fit(model, train_probe, device, autocast)
                 log(run_dir, step, metrics, wandb_run)
                 if metrics["loss/total_val"] < best:
                     best = metrics["loss/total_val"]
@@ -208,9 +206,10 @@ def train(cfg):
 def evaluate(model, sigreg, loader, cfg, device, autocast):
     """Validation metrics"""
     model.eval()
-    representation, prediction, rollout, latent = (
+    representation, prediction, internals, rollout, latent = (
         RepresentationHealth(),
         PredictionQuality(),
+        PredictorInternals(),
         RolloutError(),
         LatentActions(),
     )
@@ -224,6 +223,7 @@ def evaluate(model, sigreg, loader, cfg, device, autocast):
             pred = model.predict(emb[:, :-1], z)
             representation.update(emb, out["sigreg"])
             prediction.update(emb, pred, clip)
+            internals.update(model, emb, z)
             rollout.update(model, emb, z)
             latent.update(model, emb, z, pred, out["kl"])
         loss += out["loss"].item() * len(clip)
@@ -232,6 +232,7 @@ def evaluate(model, sigreg, loader, cfg, device, autocast):
     groups = {
         "representation": representation,
         "prediction": prediction,
+        "predictor": internals,
         "rollout": rollout,
         "latent_action": latent,
     }
@@ -239,6 +240,23 @@ def evaluate(model, sigreg, loader, cfg, device, autocast):
     for name, group in groups.items():
         metrics |= {f"{name}/{k}": v for k, v in group.compute().items()}
     return metrics
+
+
+@torch.no_grad()
+def train_fit(model, batches, device, autocast):
+    """tf / persistence on fixed training clips, in eval mode as the validation: the gap between the two is the
+    overfitting"""
+    model.eval()
+    err = pers = 0.0
+    for clip in batches:
+        with autocast:
+            emb = model.encode(clip.to(device, non_blocking=True))
+            pred = model.predict(emb[:, :-1], model.idm(emb)[0])
+        target = emb[:, 1:].float()
+        err += (pred.float() - target).pow(2).mean()
+        pers += (emb[:, :-1].float() - target).pow(2).mean()
+    model.train()
+    return float(err / pers)
 
 
 def train_step(model, sigreg, clip, opt, sched, params, cfg, autocast):
@@ -251,6 +269,7 @@ def train_step(model, sigreg, clip, opt, sched, params, cfg, autocast):
     out["gnorm"] = torch.nn.utils.clip_grad_norm_(
         params, cfg["optim"]["grad_clip"]
     )  # norm before clipping
+    out["clipped"] = (out["gnorm"] > cfg["optim"]["grad_clip"]).float()
     opt.step()
     sched.step()
     return out
