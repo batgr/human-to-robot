@@ -39,10 +39,18 @@ def read_episodes(root, split):
 
 
 def windows(episodes, horizon):
-    """Non-overlapping windows of horizon + 1 states of every episode, as many as fit. episodes: {"s": (E, T, ...)
-    states, and per transition (E, T - 1, ...) e.g. "a", "mu"} -> s (W, horizon + 1, ...), the others (W, horizon, ...)"""
-    starts = range(0, episodes["s"].size(1) - horizon, horizon)
-    return {k: torch.cat([v[:, t : t + horizon + (k == "s")] for t in starts]) for k, v in episodes.items()}
+    """Non-overlapping windows of horizon + 1 states of every episode, as many as fit. episodes: {"s": states of each
+    episode, (T_e, ...), and per transition (T_e - 1, ...) e.g. "a", "mu"}: lists, the episodes may differ in length
+    (DROID), or tensors (E, T, ...) -> s (W, horizon + 1, ...), the others (W, horizon, ...).
+    Ordered by start time then episode: neighbouring windows come from different episodes (ControlledRollout takes
+    another episode's actions from the neighbour)"""
+    out = {k: [] for k in episodes}
+    for t in range(0, max(len(s) for s in episodes["s"]) - horizon, horizon):
+        for e, s in enumerate(episodes["s"]):
+            if t + horizon < len(s):
+                for k, v in episodes.items():
+                    out[k].append(v[e][t : t + horizon + (k == "s")])
+    return {k: torch.stack(v) for k, v in out.items()}
 
 
 class ClipDataset(Dataset):

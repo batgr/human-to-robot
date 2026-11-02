@@ -11,7 +11,14 @@ from PIL import Image
 from test_jepa import small_model
 
 from h2r.data.dataset import windows
-from h2r.metrics.control import ControlledRollout, PlanningError, action_probe, plan
+from h2r.metrics.control import (
+    ControlledRollout,
+    PlanningError,
+    action_classes,
+    action_probe,
+    classify,
+    plan,
+)
 from h2r.models.controller import Controller
 
 
@@ -63,10 +70,34 @@ def test_cem_gets_closer_to_the_goal_than_no_action():
     cost = lambda acts: (model.rollout(start[:, None], start.new_zeros(4, 0, D), acts[:, None], ctrl)[:, 0, -1]
                          - goal).pow(2).sum(-1)
     goal = model.rollout(start[:, None], start.new_zeros(4, 0, D), true[:, None], ctrl)[:, 0, -1]
-    planned = plan(model, ctrl, start, goal, horizon=3, samples=64, elites=8, iterations=5,
-                   generator=torch.Generator().manual_seed(0))
+    planned = plan(model, ctrl, start[:, None], start.new_zeros(4, 0, D), goal, horizon=3, samples=64, elites=8,
+                   iterations=5, generator=torch.Generator().manual_seed(0))
     assert planned.shape == (4, 3, 7)
     assert (cost(planned) < cost(torch.zeros_like(true))).all()
+    bounds = torch.tensor([0.1] * 6 + [0.75])
+    bounded = plan(model, ctrl, start[:, None], start.new_zeros(4, 0, D), goal, horizon=3, samples=64, elites=8,
+                   iterations=2, generator=torch.Generator().manual_seed(0), bounds=bounds)
+    assert (bounded.abs() <= bounds + 1e-6).all()
+
+
+def test_action_probe_leaves_constant_dimensions_out():
+    torch.manual_seed(0)
+    mu, w = torch.randn(2000, 16), torch.randn(16, 7)
+    a = mu @ w
+    a[:, 3:6] = 0  # rotations never commanded (sim)
+    out = action_probe(mu[:1000], a[:1000], mu[1000:], a[1000:])
+    assert out["constant"] == 3 and out["r2_roll"] is None and out["r2"] > 0.999
+
+
+def test_action_classes_and_classifiers():
+    a = torch.tensor([[2.0, 0.1, 0, 0, 0, 0, 0.2], [0, -3, 0.5, 0, 0, 0, -0.3], [0, 0, 0.1, 0, 0, 0, 0]])
+    labels = action_classes(a, torch.ones(7))
+    assert labels["direction"].tolist() == [0, 3, 4] and labels["gripper"].tolist() == [0, 1, -1]
+    torch.manual_seed(0)
+    y = torch.randint(6, (600,))
+    x = torch.nn.functional.one_hot(y, 6).float() * 3 + 0.1 * torch.randn(600, 6)
+    out = classify(x[:400], y[:400], x[400:], y[400:], 6)
+    assert out["kNN"][0] > 0.99 and out["linear"][0] > 0.99
 
 
 def test_windows_cut_episodes_without_overlap():
@@ -75,6 +106,14 @@ def test_windows_cut_episodes_without_overlap():
     w = windows(data, horizon=3)  # starts 0, 3 (6 + 3 = 9 states would need T = 10)
     assert w["s"].shape == (2 * E, 4, D) and w["mu"].shape == (2 * E, 3, Z) and w["a"].shape == (2 * E, 3, A)
     assert torch.equal(w["s"][E], data["s"][0, 3:7]) and torch.equal(w["a"][E], data["a"][0, 3:6])
+
+
+def test_windows_of_episodes_of_different_lengths():
+    s = [torch.arange(9)[:, None].float(), torch.arange(5)[:, None].float() + 100]
+    a = [torch.zeros(8, 2), torch.ones(4, 2)]
+    w = windows({"s": s, "a": a}, horizon=3)  # starts 0, 3 in the first, 0 in the second
+    assert w["s"].shape == (3, 4, 1) and w["a"].shape == (3, 3, 2)
+    assert w["s"][:, 0, 0].tolist() == [0, 100, 3]  # by start time, then episode
 
 
 def jpeg(rng):
@@ -109,8 +148,9 @@ def tiny_runs(tmp_path):
                         ("actions", pa.list_(pa.list_(pa.float32())))])
     (tmp_path / "sim" / "frames").mkdir(parents=True)
     for split, n in [("train", 6), ("val", 2), ("test", 2)]:
-        rows = [{"video": f"Panda/Lift/random/episode_{split}{i}/agentview.mp4", "frames": [jpeg(rng) for _ in range(9)],
-                 "actions": rng.normal(size=(8, 7)).astype(np.float32).tolist()} for i in range(n)]
+        lengths = [9 + i for i in range(n)]  # episodes of different lengths, as DROID's
+        rows = [{"video": f"droid/episode_{split}{i}/exterior_1_left.mp4", "frames": [jpeg(rng) for _ in range(T)],
+                 "actions": rng.normal(size=(T - 1, 7)).astype(np.float32).tolist()} for i, T in enumerate(lengths)]
         pq.write_table(pa.Table.from_pylist(rows, schema=schema), tmp_path / "sim" / "frames" / f"{split}-00000.parquet")
     return tmp_path, wm
 
@@ -125,7 +165,9 @@ def test_train_controller_end_to_end(tiny_runs):
     cfg = load("configs/training/controller.yaml")
     cfg |= {"world_model": str(wm), "output_dir": str(tmp / "out"), "precision": "fp32", "horizon": 3,
             "iterations": 4, "batch_size": 8, "log_every": 2, "eval_every": 2,
-            "planning": {"episodes": 2, "horizon": 2, "samples": 8, "elites": 2, "iterations": 2}}
+            "planning": {"videos": 2, "clips_per_video": 2, "context": 2, "horizon": 2, "samples": 8, "elites": 2,
+                         "iterations": 2, "init_std": 1.0, "bounds": [0.1] * 6 + [0.75]},
+            "analysis": {"max_points": 100, "gripper_change": 0.1, "counterfactual_states": 8}}
     cfg["model"]["mlp_dim"] = 32
     cfg["data"] |= {"root": str(tmp / "sim"), "cache": str(tmp / "cache")}
     train(cfg)
@@ -134,7 +176,9 @@ def test_train_controller_end_to_end(tiny_runs):
     lines = [json.loads(line) for line in open(run / "metrics.jsonl")]
     test = next(line for line in lines if "test/loss" in line)
     assert {"test_rollout/skill_h3", "test_rollout/lost_h3", "test_rollout/error_ratio_h3", "test_rollout/controllability",
-            "test_probe/r2_x", "test_planning/dxyz", "test_planning/dxyz_ratio"} <= test.keys()
+            "test_probe/r2_x", "test_planning/dxyz", "test_planning/dxyz_ratio", "test_classes/direction_mu_kNN",
+            "test_counterfactual/x_consistency", "test_counterfactual/separability_kNN"} <= test.keys()
+    assert all((run / f"{name}.png").exists() for name in ["actions", "latent_actions", "counterfactual"])
     assert (tmp / "cache" / "wm-tiny" / "sim-train.pt").exists()
     model, ctrl = load_controller(run, torch.device("cpu"))
     assert not any(p.requires_grad for p in ctrl.parameters())

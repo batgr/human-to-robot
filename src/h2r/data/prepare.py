@@ -48,9 +48,14 @@ def frame_actions(state_path, n_frames, fps):
     return states_to_actions(states[idx]).astype(np.float32).tolist()
 
 
-def extract_frames(path, fps, size):
-    """Resample to fps, resize the short side to size, center crop: list of JPEG bytes"""
-    vf = f"fps={fps},scale={size}:{size}:force_original_aspect_ratio=increase,crop={size}:{size}"
+def extract_frames(path, fps, size, crop=True):
+    """Resample to fps, resize the short side to size and center crop, or (crop False) resize the whole frame to
+    size x size: list of JPEG bytes"""
+    vf = (
+        f"fps={fps},scale={size}:{size}:force_original_aspect_ratio=increase,crop={size}:{size}"
+        if crop
+        else f"fps={fps},scale={size}:{size}"
+    )
     cmd = [
         "ffmpeg",
         "-v",
@@ -110,7 +115,7 @@ def extract(cfg):
         )
 
     def work(video):
-        frames = extract_frames(raw / video, cfg["fps"], cfg["image_size"])
+        frames = extract_frames(raw / video, cfg["fps"], cfg["image_size"], cfg.get("crop", True))
         state = (raw / video).parent / "state.parquet"
         actions = (
             frame_actions(state, len(frames), cfg["fps"])

@@ -10,7 +10,16 @@ from pathlib import Path
 import torch
 
 from h2r.data.dataset import decode, download, read_episodes, windows
-from h2r.metrics.control import ControlledRollout, PlanningError, action_probe, plan
+from h2r.metrics.control import (
+    ControlledRollout,
+    PlanningError,
+    action_classes,
+    action_probe,
+    class_probes,
+    counterfactual,
+    figures,
+    plan,
+)
 from h2r.models.controller import build_controller
 from h2r.models.jepa import load_world_model
 from h2r.training.utils import (
@@ -27,11 +36,9 @@ from h2r.training.utils import (
 
 @torch.no_grad()
 def encode_episodes(model, episodes, device, autocast, chunk=64):
-    """Episodes of T frames each (h2r data collect: steps + 1) -> s: (E, T, ...) the world model's states in fp16,
-    a: (E, T - 1, act_dim) the real actions
+    """Episodes of T_e frames each (they may differ in length: DROID) -> s: [(T_e, ...)] the world model's states in
+    fp16, a: [(T_e - 1, act_dim)] the real actions
     """
-    lengths = {len(ep["frames"]) for ep in episodes}
-    assert len(lengths) == 1, f"episodes of different lengths: {sorted(lengths)}"
     assert all(
         len(ep["actions"]) == len(ep["frames"]) - 1 for ep in episodes
     ), "one action per transition"
@@ -46,12 +53,13 @@ def encode_episodes(model, episodes, device, autocast, chunk=64):
                 ]
             )
         states.append(emb.half().cpu())
-    actions = torch.tensor([ep["actions"] for ep in episodes], dtype=torch.float32)
-    return {"s": torch.stack(states), "a": actions}
+    actions = [torch.tensor(ep["actions"], dtype=torch.float32) for ep in episodes]
+    return {"s": states, "a": actions}
 
 
 def encoded(model, cfg, split, device, autocast):
-    """States and actions of a split, encoded once per world model run and dataset"""
+    """States and actions of a split, encoded once per world model run and dataset (lists of episodes; caches of
+    stacked episodes from before are read the same way)"""
     data = cfg["data"]
     path = (
         Path(data["cache"])
@@ -65,15 +73,17 @@ def encoded(model, cfg, split, device, autocast):
         )
         path.parent.mkdir(parents=True, exist_ok=True)
         torch.save(out, path)
-    return torch.load(path)
+    return {k: list(v) for k, v in torch.load(path).items()}
 
 
 def transitions(data):
-    """Every transition of every episode: s (M, ...), a (M, act_dim), mu (M, z_dim)"""
+    """Every transition of every episode: s (M, ...) the state it starts from, a (M, act_dim), mu (M, z_dim),
+    ds (M, ...) the change of state s_t+1 - s_t"""
     return (
-        data["s"][:, :-1].flatten(0, 1),
-        data["a"].flatten(0, 1),
-        data["mu"].flatten(0, 1),
+        torch.cat([s[:-1] for s in data["s"]]),
+        torch.cat(data["a"]),
+        torch.cat(data["mu"]),
+        torch.cat([(s[1:].float() - s[:-1].float()).half() for s in data["s"]]),
     )
 
 
@@ -88,7 +98,7 @@ def evaluate(model, ctrl, data, mean_z, cfg, device, autocast, split):
     total variance of mu) and r2 = 1 - loss / loss_mean_z;
     {split}_rollout/: ControlledRollout on the windows of the episodes"""
     ctrl.eval()
-    s, a, mu = transitions(data)
+    s, a, mu, _ = transitions(data)
     loss, chunk = 0.0, 4096
     for i in range(0, len(a), chunk):
         batch = (x[i : i + chunk].to(device) for x in (s, a, mu))
@@ -112,40 +122,95 @@ def evaluate(model, ctrl, data, mean_z, cfg, device, autocast, split):
 
 
 @torch.no_grad()
-def planning(model, ctrl, data, cfg, device, autocast, chunk=32):
-    """PlanningError on one clip of horizon + 1 frames per episode, at a seeded random start, for a seeded draw of
-    planning.episodes episodes (the same for every world model)"""
+def planning(model, ctrl, data, cfg, device, autocast, chunk=16):
+    """PlanningError, protocol of Garrido et al. 2026 (from Terver et al. 2025): planning.clips_per_video seeded random
+    clips in each of a seeded draw of planning.videos test episodes (16 x 4 = 64), the same for every world model.
+    A clip: the context states s_t-C+1..s_t (the latent actions linking them from the controller and the real
+    actions), the goal s_t+horizon, the true actions a_t..a_t+horizon-1"""
     p = cfg["planning"]
+    C, H = p["context"], p["horizon"]
     gen = torch.Generator().manual_seed(cfg["seed"])
-    T = data["s"].size(1)
-    episodes = torch.randperm(len(data["s"]), generator=gen)[: p["episodes"]].tolist()
-    E = len(episodes)
-    t = torch.randint(T - p["horizon"], (E,), generator=gen)
-    steps = t[:, None] + torch.arange(p["horizon"] + 1)
-    states = torch.stack(
-        [data["s"][e, steps[i]] for i, e in enumerate(episodes)]
-    )  # (E, horizon + 1, ...)
-    actions = torch.stack(
-        [data["a"][e, steps[i, :-1]] for i, e in enumerate(episodes)]
-    )  # (E, horizon, act_dim)
+    long_enough = [e for e, s in enumerate(data["s"]) if len(s) >= C + H]
+    pick = torch.randperm(len(long_enough), generator=gen)[: p["videos"]].tolist()
+    clips = []
+    for e in (long_enough[i] for i in pick):
+        T = len(data["s"][e])
+        for t in torch.randint(C - 1, T - H, (p["clips_per_video"],), generator=gen).tolist():
+            clips.append((e, t))
+    context = torch.stack([data["s"][e][t - C + 1 : t + 1] for e, t in clips])  # (E, C, ...)
+    goal = torch.stack([data["s"][e][t + H] for e, t in clips])
+    past_a = torch.stack([data["a"][e][t - C + 1 : t] for e, t in clips])  # (E, C - 1, act_dim)
+    actions = torch.stack([data["a"][e][t : t + H] for e, t in clips])  # (E, H, act_dim)
+    bounds = None if p.get("bounds") is None else torch.tensor(p["bounds"], device=device)
     error = PlanningError()
     ctrl.eval()
-    for i in range(0, E, chunk):
-        s = states[i : i + chunk].to(device).float()
+    for i in range(0, len(clips), chunk):
+        ctx = context[i : i + chunk].to(device).float()
         with autocast:
+            past = ctrl(past_a[i : i + chunk].to(device), ctx[:, :-1].flatten(2))
             planned = plan(
                 model,
                 ctrl,
-                s[:, 0],
-                s[:, -1],
-                p["horizon"],
+                ctx,
+                past,
+                goal[i : i + chunk].to(device).float(),
+                H,
                 p["samples"],
                 p["elites"],
                 p["iterations"],
                 gen,
+                init_std=p.get("init_std", 1.0),
+                bounds=bounds,
             )
         error.update(planned.float().cpu(), actions[i : i + chunk])
-    return error.compute()
+    return error.compute() | {"clips": len(clips)}
+
+
+@torch.no_grad()
+def analysis(model, ctrl, train_set, test_set, mean_z, cfg, device, autocast):
+    """Do the latent actions name the real action (diagnostics E11 A), and what does each action dimension do through
+    the controller (E11 B, only when it sees the action)? Metrics, and the figures (h2r.metrics.control.figures)"""
+    c = cfg["analysis"]
+    gen = torch.Generator().manual_seed(cfg["seed"])
+    feats, labels = {}, {}
+    s_train, a_train, mu_train, ds_train = transitions(train_set)
+    std = a_train.std(0)
+    for name, (s, a, mu, ds) in [("train", (s_train, a_train, mu_train, ds_train)), ("test", transitions(test_set))]:
+        idx = torch.randperm(len(a), generator=gen)[: c["max_points"]]
+        s, a, mu, ds = s[idx], a[idx], mu[idx], ds[idx]
+        with autocast:
+            z = torch.cat([ctrl(x.to(device), y.to(device).float().flatten(1)).float().cpu()
+                           for x, y in zip(a.split(4096), s.split(4096))])
+        feats[name] = {"mu": mu, "controller_z": z, "s_t": s.float().flatten(1), "ds": ds.float().flatten(1)}
+        labels[name] = action_classes(a, std, c["gripper_change"])
+    out, conf = class_probes(feats["train"], feats["test"], labels["train"], labels["test"])
+    metrics = {f"test_classes/{k}": v for k, v in out.items()}
+
+    cf = None
+    if "action" in ctrl.inputs:
+        spread = (mu_train - mean_z.cpu()).norm(dim=-1).median().item()
+        step = ds_train.float().flatten(1).norm(dim=-1).median().item()
+        s_test = transitions(test_set)[0]
+        with autocast:
+            out, cf = counterfactual(model, ctrl, s_test, step, spread, gen, n=c["counterfactual_states"])
+        metrics |= {f"test_counterfactual/{k}": v for k, v in out.items()}
+    bounds = cfg["planning"].get("bounds")
+    figs = figures(a_train, None if bounds is None else torch.tensor(bounds), feats["test"], labels["test"], conf, cf)
+    return metrics, figs
+
+
+def save_figures(figs, run_dir, step, wandb_run):
+    """PNG files in the run directory, and W&B images under test_figures/"""
+    from matplotlib import pyplot as plt
+
+    for name, fig in figs.items():
+        fig.savefig(run_dir / f"{name}.png", dpi=120)
+    if wandb_run is not None:
+        import wandb
+
+        wandb_run.log({f"test_figures/{k}": wandb.Image(f) for k, f in figs.items()}, step=step)
+    for fig in figs.values():
+        plt.close(fig)
 
 
 def train(cfg):
@@ -163,12 +228,10 @@ def train(cfg):
     for split in ("train", "val", "test"):
         data = encoded(model, cfg, split, device, autocast)
         with torch.no_grad(), autocast:  # the IDM's latent actions of every transition (eval: z = mu)
-            data["mu"] = torch.cat(
-                [model.idm(s.to(device).float())[0].float().cpu() for s in data["s"].split(256)]
-            )
+            data["mu"] = [model.idm(s[None].to(device).float())[0][0].float().cpu() for s in data["s"]]
         splits.append(data)
     train_set, val_set, test_set = splits
-    s, a, mu = (x.to(device) for x in transitions(train_set))
+    s, a, mu = (x.to(device) for x in transitions(train_set)[:3])
     mean_z = mu.mean(0)
 
     ctrl = build_controller(cfg["model"], wm_cfg).to(device)
@@ -228,16 +291,20 @@ def train(cfg):
 
     # the test split, once, with the best controller (selected on val)
     ctrl.load_state_dict(torch.load(run_dir / "best.pt", map_location=device)["model"])
+    ctrl.eval()
     metrics = evaluate(model, ctrl, test_set, mean_z, cfg, device, autocast, "test")
-    _, a_test, mu_test = transitions(test_set)
+    _, a_test, mu_test, _ = transitions(test_set)
     metrics |= {
         f"test_probe/{k}": v
         for k, v in action_probe(mu.cpu(), a.cpu(), mu_test, a_test).items()
     }
-    metrics |= {
-        f"test_planning/{k}": v
-        for k, v in planning(model, ctrl, test_set, cfg, device, autocast).items()
-    }
-    log(run_dir, cfg["iterations"], metrics, wandb_run)
+    if "action" in ctrl.inputs:  # planning over actions the controller does not see means nothing
+        metrics |= {
+            f"test_planning/{k}": v
+            for k, v in planning(model, ctrl, test_set, cfg, device, autocast).items()
+        }
+    more, figs = analysis(model, ctrl, train_set, test_set, mean_z, cfg, device, autocast)
+    log(run_dir, cfg["iterations"], metrics | more, wandb_run)
+    save_figures(figs, run_dir, cfg["iterations"], wandb_run)
     if wandb_run is not None:
         wandb_run.finish()

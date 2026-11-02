@@ -12,6 +12,11 @@ GROUPS = {
             "configs/data/config.yaml",
             "raw videos -> frame shards",
         ),
+        "droid": (
+            "h2r.data.droid:download",
+            "configs/data/droid.yaml",
+            "DROID episodes (LeRobot) -> one folder per episode: video + state.parquet",
+        ),
         "push": (
             "h2r.data.prepare:push",
             "configs/data/config.yaml",

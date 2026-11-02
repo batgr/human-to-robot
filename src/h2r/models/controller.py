@@ -11,10 +11,15 @@ from h2r.models.jepa import load_world_model
 
 class Controller(nn.Module):
     """Latent action of a real action taken from the current frame, to drive the world model without the IDM:
-    an MLP on the standardized action and the state"""
+    an MLP on the standardized action and the state.
+    inputs: what the controller sees, ["action", "state"] by default; one of them alone for the two ablations, at the
+    same capacity (the other input zeroed): ["action"] is the action-only controller of Garrido et al. 2026 (it
+    collapses to no motion there), ["state"] the state-only one, how much the current frame alone gives of z"""
 
-    def __init__(self, *, dim, z_dim=None, act_dim=7, depth=2, mlp_dim=None):
+    def __init__(self, *, dim, z_dim=None, act_dim=7, depth=2, mlp_dim=None, inputs=("action", "state")):
         super().__init__()
+        assert set(inputs) <= {"action", "state"} and inputs, f"inputs: action and / or state, got {inputs}"
+        self.inputs = tuple(inputs)
         mlp_dim = mlp_dim or 4 * dim
         z_dim = z_dim or dim
 
@@ -50,7 +55,11 @@ class Controller(nn.Module):
         returns z_hat: (..., z_dim)
         """
         a = (action - self.act_mean) / self.act_std
-        return self.head(self.norm(self.net(torch.cat([a, emb], dim=-1))))
+        if "action" not in self.inputs:
+            a = torch.zeros_like(a)
+        if "state" not in self.inputs:
+            emb = torch.zeros_like(emb)
+        return self.head(self.norm(self.net(torch.cat([a, emb.to(a.dtype)], dim=-1))))
 
 
 def build_controller(cfg, wm_cfg):

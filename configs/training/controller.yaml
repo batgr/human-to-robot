@@ -6,18 +6,26 @@ output_dir: outputs
 precision: bf16
 
 data:
-  root: data/h2r-sim/
-  hf_repo: batgre/h2r-sim-v3 # Panda Lift, 40 actions per episode at 4 Hz (the world model's 4 fps), scripted and random
+  root: data/h2r-droid/
+  hf_repo: batgre/h2r-droid # DROID (Garrido et al. 2026), 10 h of the left exterior camera at 4 fps (configs/data/droid.yaml); sim: batgre/h2r-sim-v3, root data/h2r-sim/
   cache: data/cache # states and latent actions, encoded once per world model run and split
 
 horizon: 7 # open-loop steps of the rollout metrics, as the world model's (clips of 8 frames)
-planning: # offline planning to a goal frame on the test episodes, CEM of Garrido et al. 2026 (appendix A)
-  episodes: 128 # test episodes, one clip each (Garrido et al.: 64)
+planning: # offline planning to a goal frame on the test episodes, CEM of Garrido et al. 2026 (appendix A), DROID config of Terver et al. 2025
+  videos: 16 # test episodes (Garrido et al.: 16 validation videos)
+  clips_per_video: 4 # 16 x 4 = 64 clips, random starts
+  context: 2 # real states before planning (Terver et al.: ctxt2)
   horizon: 3 # actions planned, the goal is the frame after them
   samples: 300
   elites: 10
   iterations: 15
-iterations: 4000
+  init_std: 1.0 # CEM starts at N(0, init_std) in standardized actions (Garrido et al.: zero mean, unit variance)
+  bounds: [0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.75] # |action| per dimension in the dataset's units, the candidates clipped (Terver et al.: max_norms 0.1 on xyz and rotations, 0.75 on the gripper); null = unbounded
+analysis: # do the latent actions name the real action (diagnostics E11 A), what each action dimension does (E11 B)
+  max_points: 20000 # transitions per split for the class probes
+  gripper_change: 0.1 # |Δ closedness| above which a step closes or opens the gripper
+  counterfactual_states: 2000
+iterations: 3000 # Garrido et al. 2026, appendix A
 batch_size: 256
 log_every: 100
 eval_every: 500
@@ -25,7 +33,7 @@ eval_every: 500
 optim: # Garrido et al. 2026, appendix A
   lr: 0.001
   weight_decay: 0.04
-  warmup: 0.075 # 300 of the 4000 iterations
+  warmup: 0.1 # 300 of the 3000 iterations
 
 wandb:
   enabled: false

@@ -1,0 +1,28 @@
+# DROID for the controller (Garrido et al. 2026; V-JEPA 2-AC: ~62 h, 4 fps, one exterior camera), scaled to the world
+# model's 10 h of video: h2r data droid, then h2r data extract / push with this config
+raw_dir: data/raw/droid/
+processed_dir: data/processed/droid/
+
+droid:
+  repo: lerobot/droid_1.0.1
+  camera: observation.images.exterior_1_left # left exterior camera (Terver et al.: left_mp4_path)
+  minutes: 600 # 10 h, ~1,900 episodes
+  max_files: 24 # packed video files drawn (~1.6 h and ~490 MB each): bounds the download (~12 GB)
+  min_seconds: 4 # 16 frames at 4 fps, enough for the rollout windows (8 frames) and the planning clips (6)
+  seed: 0
+
+fps: 4
+image_size: 224
+crop: false # the whole 320 x 180 frame squashed to 224 x 224: a center crop would cut the arm off at the sides
+min_frames: 8
+actions: true # from the sibling state.parquet: Δxyz, R_t+1 R_t^T as Euler xyz, Δgripper (V-JEPA 2-AC)
+split_by: folder
+
+split:
+  val: 0.1
+  test: 0.1
+  seed: 0
+
+shard_size: 200
+hf_repo: batgre/h2r-droid
+private: false
