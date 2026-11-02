@@ -29,19 +29,20 @@ def download(repo, root):
 
 
 def read_episodes(root, split):
-    """Videos of a split that have actions: [{"video", "frames": JPEG bytes, "actions": (T - 1, act_dim)}]"""
-    rows = [
-        row
-        for p in shards(root, split)
-        for row in pq.read_table(p, columns=["video", "frames", "actions"]).to_pylist()
-    ]
+    """Videos of a split that have actions: [{"video", "frames": JPEG bytes, "actions": (T - 1, act_dim)}], and
+    "states": (T, state_dim) the absolute state at each frame when the shards have it"""
+    rows = []
+    for p in shards(root, split):
+        columns = [c for c in ["video", "frames", "actions", "states"] if c in pq.read_schema(p).names]
+        rows += pq.read_table(p, columns=columns).to_pylist()
     return [r for r in rows if r["actions"] is not None]
 
 
 def windows(episodes, horizon):
     """Non-overlapping windows of horizon + 1 states of every episode, as many as fit. episodes: {"s": states of each
-    episode, (T_e, ...), and per transition (T_e - 1, ...) e.g. "a", "mu"}: lists, the episodes may differ in length
-    (DROID), or tensors (E, T, ...) -> s (W, horizon + 1, ...), the others (W, horizon, ...).
+    episode, (T_e, ...), the others per frame (T_e, ...) e.g. "x" or per transition (T_e - 1, ...) e.g. "a", "mu"}:
+    lists, the episodes may differ in length (DROID), or tensors (E, T, ...) -> per frame (W, horizon + 1, ...), per
+    transition (W, horizon, ...).
     Ordered by start time then episode: neighbouring windows come from different episodes (ControlledRollout takes
     another episode's actions from the neighbour)"""
     out = {k: [] for k in episodes}
@@ -49,7 +50,7 @@ def windows(episodes, horizon):
         for e, s in enumerate(episodes["s"]):
             if t + horizon < len(s):
                 for k, v in episodes.items():
-                    out[k].append(v[e][t : t + horizon + (k == "s")])
+                    out[k].append(v[e][t : t + horizon + (len(v[e]) == len(s))])
     return {k: torch.stack(v) for k, v in out.items()}
 
 

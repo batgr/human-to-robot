@@ -39,13 +39,13 @@ def states_to_actions(states):
     )
 
 
-def frame_actions(state_path, n_frames, fps):
-    """Actions between the n_frames kept frames: state at the nearest timestamp of each frame (frame k at k / fps)"""
+def frame_states(state_path, n_frames, fps):
+    """The state at each of the n_frames kept frames (the nearest timestamp to frame k at k / fps): (n_frames, 7)"""
     table = pq.read_table(state_path)
     times = np.asarray(table["timestamp"].to_pylist())
     states = np.asarray(table["state"].to_pylist(), dtype=np.float64)
     idx = np.abs(times[None] - np.arange(n_frames)[:, None] / fps).argmin(1)
-    return states_to_actions(states[idx]).astype(np.float32).tolist()
+    return states[idx]
 
 
 def extract_frames(path, fps, size, crop=True):
@@ -93,8 +93,9 @@ def extract(cfg):
     (out / "frames").mkdir(parents=True, exist_ok=True)
     shutil.copy(cfg["config_path"], out / "config.yaml")  # how the frames were made
     columns = [("video", pa.string()), ("frames", pa.list_(pa.binary()))]
-    if cfg.get("actions"):
+    if cfg.get("actions"):  # the actions between frames, and the absolute state at each frame (probes)
         columns.append(("actions", pa.list_(pa.list_(pa.float32()))))
+        columns.append(("states", pa.list_(pa.list_(pa.float32()))))
     schema = pa.schema(columns)
     buffers, shards, manifest = {}, {}, []
 
@@ -117,16 +118,16 @@ def extract(cfg):
     def work(video):
         frames = extract_frames(raw / video, cfg["fps"], cfg["image_size"], cfg.get("crop", True))
         state = (raw / video).parent / "state.parquet"
-        actions = (
-            frame_actions(state, len(frames), cfg["fps"])
-            if cfg.get("actions") and state.exists()
+        states = (
+            frame_states(state, len(frames), cfg["fps"])
+            if cfg.get("actions") and state.exists() and frames
             else None
         )
-        return video, frames, actions
+        return video, frames, states
 
     with ThreadPoolExecutor(os.cpu_count()) as pool:
         for start in range(0, len(videos), 256):  # chunks keep memory bounded
-            for video, frames, actions in pool.map(work, videos[start : start + 256]):
+            for video, frames, states in pool.map(work, videos[start : start + 256]):
                 if len(frames) < cfg["min_frames"]:
                     continue  # no transition, or unreadable
                 # split_by folder: the cameras of an episode share its folder, so a split
@@ -136,9 +137,12 @@ def extract(cfg):
                     else video
                 )
                 split = split_of(key, cfg["split"])
-                row = {"video": video, "frames": frames} | (
-                    {"actions": actions} if cfg.get("actions") else {}
-                )
+                row = {"video": video, "frames": frames}
+                if cfg.get("actions"):
+                    row |= {
+                        "actions": None if states is None else states_to_actions(states).astype(np.float32).tolist(),
+                        "states": None if states is None else states.astype(np.float32).tolist(),
+                    }
                 buffers.setdefault(split, []).append(row)
                 if len(buffers[split]) == cfg["shard_size"]:
                     flush(split)

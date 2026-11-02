@@ -18,6 +18,7 @@ from h2r.metrics.control import (
     action_probe,
     classify,
     plan,
+    regimes,
 )
 from h2r.models.controller import Controller
 
@@ -108,6 +109,13 @@ def test_windows_cut_episodes_without_overlap():
     assert torch.equal(w["s"][E], data["s"][0, 3:7]) and torch.equal(w["a"][E], data["a"][0, 3:6])
 
 
+def test_regimes_of_windows():
+    a = torch.zeros(3, 2, 7)
+    a[1, 0, 0] = 0.02  # moves 2 cm at one step
+    a[2, 1, 6] = 0.3  # closes the gripper
+    assert regimes(a).tolist() == [0, 1, 2]
+
+
 def test_windows_of_episodes_of_different_lengths():
     s = [torch.arange(9)[:, None].float(), torch.arange(5)[:, None].float() + 100]
     a = [torch.zeros(8, 2), torch.ones(4, 2)]
@@ -145,12 +153,13 @@ def tiny_runs(tmp_path):
 
     rng = np.random.default_rng(0)
     schema = pa.schema([("video", pa.string()), ("frames", pa.list_(pa.binary())),
-                        ("actions", pa.list_(pa.list_(pa.float32())))])
+                        ("actions", pa.list_(pa.list_(pa.float32()))), ("states", pa.list_(pa.list_(pa.float32())))])
     (tmp_path / "sim" / "frames").mkdir(parents=True)
     for split, n in [("train", 6), ("val", 2), ("test", 2)]:
         lengths = [9 + i for i in range(n)]  # episodes of different lengths, as DROID's
         rows = [{"video": f"droid/episode_{split}{i}/exterior_1_left.mp4", "frames": [jpeg(rng) for _ in range(T)],
-                 "actions": rng.normal(size=(T - 1, 7)).astype(np.float32).tolist()} for i, T in enumerate(lengths)]
+                 "actions": rng.normal(size=(T - 1, 7)).astype(np.float32).tolist(),
+                 "states": rng.normal(size=(T, 7)).astype(np.float32).tolist()} for i, T in enumerate(lengths)]
         pq.write_table(pa.Table.from_pylist(rows, schema=schema), tmp_path / "sim" / "frames" / f"{split}-00000.parquet")
     return tmp_path, wm
 
@@ -167,7 +176,8 @@ def test_train_controller_end_to_end(tiny_runs):
             "iterations": 4, "batch_size": 8, "log_every": 2, "eval_every": 2,
             "planning": {"videos": 2, "clips_per_video": 2, "context": 2, "horizon": 2, "samples": 8, "elites": 2,
                          "iterations": 2, "init_std": 1.0, "bounds": [0.1] * 6 + [0.75]},
-            "analysis": {"max_points": 100, "gripper_change": 0.1, "counterfactual_states": 8}}
+            "analysis": {"max_points": 100, "gripper_change": 0.1, "still_xyz": 0.005, "counterfactual_states": 8,
+                         "trajectories": 4}}
     cfg["model"]["mlp_dim"] = 32
     cfg["data"] |= {"root": str(tmp / "sim"), "cache": str(tmp / "cache")}
     train(cfg)
@@ -177,8 +187,11 @@ def test_train_controller_end_to_end(tiny_runs):
     test = next(line for line in lines if "test/loss" in line)
     assert {"test_rollout/skill_h3", "test_rollout/lost_h3", "test_rollout/error_ratio_h3", "test_rollout/controllability",
             "test_probe/r2_x", "test_planning/dxyz", "test_planning/dxyz_ratio", "test_classes/direction_mu_kNN",
-            "test_counterfactual/x_consistency", "test_counterfactual/separability_kNN"} <= test.keys()
-    assert all((run / f"{name}.png").exists() for name in ["actions", "latent_actions", "counterfactual"])
+            "test_counterfactual/x_consistency", "test_counterfactual/separability_kNN", "test_state_probe/real_r2",
+            "test_state_probe/ctrl_r2_h3", "test_spectra/ds_imagined_effective_rank", "test_planning/clipped_last",
+            "test_regimes/free_n"} <= test.keys()
+    figures = ["actions", "latent_actions", "counterfactual", "regimes", "state_probe", "spectra", "trajectories", "cem"]
+    assert all((run / f"{name}.png").exists() for name in figures)
     assert (tmp / "cache" / "wm-tiny" / "sim-train.pt").exists()
     model, ctrl = load_controller(run, torch.device("cpu"))
     assert not any(p.requires_grad for p in ctrl.parameters())

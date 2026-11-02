@@ -94,8 +94,8 @@ def download(cfg):
     for i, (path, eps) in enumerate(sorted(by_video.items())):
         with tempfile.TemporaryDirectory() as tmp:  # the packed file is deleted after cutting
             video = hf_hub_download(d["repo"], path, repo_type="dataset", local_dir=tmp)
-            out = lambda e: raw / f"episode_{e['index']:06d}" / f"{d['camera']}.mp4"
             with ThreadPoolExecutor(8) as pool:
-                done += sum(pool.map(lambda e: cut(video, e["start"], e["end"], out(e)), eps))
+                done += sum(pool.map(lambda e: cut(video, e["start"], e["end"],
+                                                   raw / f"episode_{e['index']:06d}" / f"{d['camera']}.mp4"), eps))
         print(f"video files {i + 1} / {len(by_video)}: {done} episodes cut", flush=True)
     print(f"{done} / {len(chosen)} episodes in {raw}")

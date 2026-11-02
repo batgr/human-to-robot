@@ -24,7 +24,9 @@ planning: # offline planning to a goal frame on the test episodes, CEM of Garrid
 analysis: # do the latent actions name the real action (diagnostics E11 A), what each action dimension does (E11 B)
   max_points: 20000 # transitions per split for the class probes
   gripper_change: 0.1 # |Δ closedness| above which a step closes or opens the gripper
+  still_xyz: 0.005 # m per step (2 cm/s): a window is still when every step moves the end effector less
   counterfactual_states: 2000
+  trajectories: 6 # test windows drawn in the PCA of the real states
 iterations: 3000 # Garrido et al. 2026, appendix A
 batch_size: 256
 log_every: 100

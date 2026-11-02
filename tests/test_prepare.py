@@ -1,12 +1,14 @@
+import io
 import subprocess
 
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from PIL import Image
 from scipy.spatial.transform import Rotation
 
-from h2r.data.prepare import extract, frame_actions, states_to_actions
+from h2r.data.prepare import extract, extract_frames, frame_states, states_to_actions
 
 
 def vjepa2_actions(poses):
@@ -32,9 +34,15 @@ def test_states_sampled_at_kept_frames(tmp_path):
     states = np.zeros((30, 7))
     states[:, 0] = times  # x grows by 1 m/s
     pq.write_table(pa.table({"timestamp": times, "state": states.tolist()}), tmp_path / "state.parquet")
-    actions = np.asarray(frame_actions(tmp_path / "state.parquet", 5, fps=4))  # frames at 0, 0.25, ... 1 s
+    kept = frame_states(tmp_path / "state.parquet", 5, fps=4)  # frames at 0, 0.25, ... 1 s
     nearest = np.array([0, 4, 7, 11, 15]) / 15  # nearest 15 fps timestamps (0.5 s: tie, the earlier one)
-    assert np.allclose(actions[:, 0], np.diff(nearest), atol=1e-6)
+    assert np.allclose(kept[:, 0], nearest, atol=1e-6)
+
+
+def test_frames_resized_without_crop(tmp_path):
+    video(tmp_path / "wide.mp4")
+    frames = extract_frames(tmp_path / "wide.mp4", 4, 64, crop=False)
+    assert frames and Image.open(io.BytesIO(frames[0])).size == (64, 64)
 
 
 def video(path, seconds=2, fps=15):
@@ -68,3 +76,6 @@ def test_extract(tmp_path, with_actions):
     cams = [rows[f"robot/episode_000001/{c}.mp4"] for c in ("exterior_1_left", "exterior_2_left")]
     assert len(cams[0]["actions"]) == len(cams[0]["frames"]) - 1 == 7  # 2 s at 4 fps: 8 frames
     assert cams[0]["actions"] == cams[1]["actions"]
+    assert len(cams[0]["states"]) == len(cams[0]["frames"])  # the absolute state at each frame
+    expected = states_to_actions(np.asarray(cams[0]["states"], dtype=np.float64))
+    assert np.allclose(cams[0]["actions"], expected, atol=1e-4)
