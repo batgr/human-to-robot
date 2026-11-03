@@ -5,9 +5,9 @@ import torch
 import torch.nn.functional as F
 from einops import rearrange
 from torch.utils.data import DataLoader
-from h2r.data.dataset import ClipDataset, shards
+from h2r.data.dataset import ClipDataset, all_actions, shards
 from h2r.metrics.latent_actions import LatentActions
-from h2r.metrics.probe import HandProbe
+from h2r.metrics.probe import HandProbe, RobotProbe
 from h2r.metrics.prediction import PredictionQuality, PredictorInternals, RolloutError
 from h2r.metrics.representation import RepresentationHealth
 from h2r.training.utils import (
@@ -37,7 +37,8 @@ from h2r.models.module import SIGReg
 def build_loaders(cfg, device):
     clip_len = cfg["data"]["clip_len"]
     root = cfg["data"]["processed_dir"]
-    ds_train = ClipDataset(root, "train", clip_len)
+    actions = cfg["model"].get("conditioning") == "action"  # clips with their real actions
+    ds_train = ClipDataset(root, "train", clip_len, actions)
     args = dict(
         batch_size=cfg["batch_size"],
         num_workers=cfg["num_workers"],
@@ -50,12 +51,18 @@ def build_loaders(cfg, device):
         return batches, batches
     val = None
     if shards(root, "val"):
-        ds_val = ClipDataset(root, "val", clip_len)
+        ds_val = ClipDataset(root, "val", clip_len, actions)
         order = torch.randperm(
             len(ds_val), generator=torch.Generator().manual_seed(0)
         ).tolist()
         val = DataLoader(ds_val, sampler=order, drop_last=False, **args)
     return train, val
+
+
+def to_device(batch, device):
+    """A batch of clips, or of (clips, actions) for an action-conditioned model -> clip, actions (None without)"""
+    clip, actions = batch if isinstance(batch, (list, tuple)) else (batch, None)
+    return clip.to(device, non_blocking=True), None if actions is None else actions.to(device, non_blocking=True)
 
 
 def build_optimizer(model, cfg):
@@ -106,8 +113,12 @@ def train(cfg):
     train_probe = list(itertools.islice(train_loader, 2))  # fixed training clips, for the overfitting gap
     hands = cfg.get("probe", {}).get("hands")  # tracked hands of the validation videos: HandProbe at each validation
     hand_probe = HandProbe(cfg["data"]["processed_dir"], hands, cfg["probe"]["frames"]) if hands else None
+    robot = cfg.get("probe", {}).get("robot")  # end-effector state of the validation episodes (DROID, sim)
+    robot_probe = RobotProbe(cfg["data"]["processed_dir"], cfg["probe"]["frames"]) if robot else None
 
     model = build_model(cfg["model"]).to(device)
+    if model.action_encoder is not None:  # standardized real actions (saved with the weights: resume reloads them)
+        model.action_encoder.set_action_stats(all_actions(cfg["data"]["processed_dir"], "train").to(device))
     sigreg = SIGReg().to(device)
     params = [p for p in model.parameters() if p.requires_grad]
     opt, sched = build_optimizer(model, cfg)
@@ -143,13 +154,13 @@ def train(cfg):
     for step in range(start, cfg["iterations"] + 1):
 
         t = time.time()
-        clip = next(train_iter).to(device, non_blocking=True)
+        clip, actions = to_device(next(train_iter), device)
         data_time += time.time() - t
 
         logging = step % cfg["log_every"] == 0
         if logging:  # the weight matrices before the step, for the update ratios
             before = {n: p.detach().clone() for n, p in model.named_parameters() if p.requires_grad and p.ndim == 2}
-        out = train_step(model, sigreg, clip, opt, sched, params, cfg, autocast)
+        out = train_step(model, sigreg, clip, actions, opt, sched, params, cfg, autocast)
         for k, v in out.items():
             sums[k] = sums.get(k, 0) + v.detach()
 
@@ -183,9 +194,11 @@ def train(cfg):
             if val_loader is not None:
                 metrics = evaluate(model, sigreg, val_loader, cfg, device, autocast)
                 metrics["prediction/tf_over_persistence_train"] = train_fit(model, train_probe, device, autocast)
-                metrics |= gradient_shares(model, sigreg, train_probe[0].to(device), cfg, autocast)
+                metrics |= gradient_shares(model, sigreg, *to_device(train_probe[0], device), cfg, autocast)
                 if hand_probe is not None:
                     metrics |= {f"probe/{k}": v for k, v in hand_probe.compute(model, device, autocast).items()}
+                if robot_probe is not None:
+                    metrics |= {f"probe/{k}": v for k, v in robot_probe.compute(model, device, autocast).items()}
                 log(run_dir, step, metrics, wandb_run)
                 if metrics[best_metric] < best:
                     best = metrics[best_metric]
@@ -224,12 +237,12 @@ def evaluate(model, sigreg, loader, cfg, device, autocast):
         LatentActions(),
     )
     loss, n = 0.0, 0
-    for clip in loader:
-        clip = clip.to(device, non_blocking=True)
+    for batch in loader:
+        clip, actions = to_device(batch, device)
         with autocast:
             emb = model.encode(clip)
-            out = losses(model, sigreg, emb, cfg)
-            z, _ = model.idm(emb)  # eval: z = mu
+            out = losses(model, sigreg, emb, cfg, actions)
+            z, _ = model.latents(emb, actions)  # eval: z = mu, or the embedded real actions
             pred = model.predict(emb[:, :-1], z)
             representation.update(emb, out["sigreg"])
             prediction.update(emb, pred, clip)
@@ -258,10 +271,11 @@ def train_fit(model, batches, device, autocast):
     overfitting"""
     model.eval()
     err = pers = 0.0
-    for clip in batches:
+    for batch in batches:
+        clip, actions = to_device(batch, device)
         with autocast:
-            emb = model.encode(clip.to(device, non_blocking=True))
-            pred = model.predict(emb[:, :-1], model.idm(emb)[0])
+            emb = model.encode(clip)
+            pred = model.predict(emb[:, :-1], model.latents(emb, actions)[0])
         target = emb[:, 1:].float()
         err += (pred.float() - target).pow(2).mean()
         pers += (emb[:, :-1].float() - target).pow(2).mean()
@@ -279,7 +293,7 @@ def layer_of(name):
     return "embeddings" if "embeddings" in name else "final_norm"
 
 
-def gradient_shares(model, sigreg, clip, cfg, autocast):
+def gradient_shares(model, sigreg, clip, actions, cfg, autocast):
     """Which loss term moves the encoder and the projector, on one training batch (where.ipynb part 5: SIGReg gave 92 %
     of the encoder's gradient on the long CLS run, 100 % on patch16, tf opposed to it):
     - share_tf_<layer>: <g_pred, g> / |g|^2, g_pred the gradient of the prediction terms (tf and the rollout terms),
@@ -289,12 +303,13 @@ def gradient_shares(model, sigreg, clip, cfg, autocast):
     Adam rescales each parameter: the norms are not the update sizes, the shares give its direction."""
     named = [(n, p) for n, p in model.named_parameters() if p.requires_grad and n.startswith(("encoder", "projector"))]
     with autocast:
-        out = losses(model, sigreg, model.encode(clip), cfg)
+        out = losses(model, sigreg, model.encode(clip), cfg, actions)
     terms = {
         "tf": out["tf"] + sum(v for k, v in out.items() if k.startswith("rollout")),
         "sigreg": cfg["loss"]["sigreg"] * out["sigreg"],
         "kl": cfg["loss"]["beta"] * out["kl"],
     }
+    terms = {k: v for k, v in terms.items() if v.requires_grad}  # real actions: no KL term
     grads = {}
     for i, (k, term) in enumerate(terms.items()):
         g = torch.autograd.grad(term, [p for _, p in named], retain_graph=i < len(terms) - 1, allow_unused=True)
@@ -316,10 +331,10 @@ def gradient_shares(model, sigreg, clip, cfg, autocast):
     return metrics
 
 
-def train_step(model, sigreg, clip, opt, sched, params, cfg, autocast):
+def train_step(model, sigreg, clip, actions, opt, sched, params, cfg, autocast):
 
     with autocast:
-        out = losses(model, sigreg, model.encode(clip), cfg)
+        out = losses(model, sigreg, model.encode(clip), cfg, actions)
     opt.zero_grad(set_to_none=True)
     out["loss"].backward()
     out |= grad_norms(model)
@@ -332,10 +347,11 @@ def train_step(model, sigreg, clip, opt, sched, params, cfg, autocast):
     return out
 
 
-def losses(model, sigreg, emb, cfg):
+def losses(model, sigreg, emb, cfg, actions=None):
+    """actions: (B, T-1, act_dim) the real actions, for an action-conditioned model (kl = 0)"""
     beta = cfg["loss"]["beta"]
     sig_w = cfg["loss"]["sigreg"]
-    z, kl = model.idm(emb)  # (B, T-1, z_dim), one latent action per transition
+    z, kl = model.latents(emb, actions)  # (B, T-1, z_dim), one latent action per transition
 
     pred = model.predict(emb[:, :-1], z)  # (B, T-1, D) or (B, T-1, N, D)
 

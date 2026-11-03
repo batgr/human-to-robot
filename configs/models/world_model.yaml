@@ -2,6 +2,7 @@ embed_dim: &D 192 # LeWM dims (config/train/model/lewm.yaml)
 latent_action_dim: &Z 64 # z < D: a bottleneck on top of the KL (Garrido et al.: 128 for V-JEPA 2-L states)
 num_patches: 1 # tokens per state: 1 = MLP on the CLS token (LeWM), 256 = MLP on every patch token (16 x 16 at 224 px), 16 = patch projector (4 x 4 grid), 4 = its 2 x 2 pooling
 residual: false # true: the predictor outputs s_t+1 - s_t, zero at init (test.ipynb 30-31 Oct., CLS: plateaued from step 200, 0.79 vs 0.475 direct at 1000 steps)
+conditioning: idm # idm = latent actions inferred from the frames; action = the real actions of the shards through action_encoder (LeWM; DROID, sim), no IDM
 history_size: 2 # W_p: states the predictor sees when unrolling at planning time and in the rollout metrics (Terver et al. 2025: 2); W_p <= W
 
 encoder: configs/models/encoders/vit_tiny.yaml # or dinov2_small.yaml (frozen)
@@ -31,3 +32,7 @@ idm:
   z_dim: *Z
   depth: 2
   heads: 4
+
+action_encoder: # conditioning: action. MLP on the standardized real action -> cond_dim (LeWM's Embedder)
+  act_dim: 7 # DROID / sim: Δxyz, rotation as Euler xyz, Δgripper
+  mlp_dim: 256

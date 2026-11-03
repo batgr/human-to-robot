@@ -155,3 +155,22 @@ def test_residual_predictor_starts_as_persistence():
     emb = model.encode(torch.randint(0, 255, (2, 3, 3, 28, 28)))
     z, _ = model.idm(emb)
     assert torch.equal(model.predict(emb[:, :-1], z), emb[:, :-1])
+
+
+def test_action_conditioned_model_reads_the_real_actions():
+    """conditioning: action: no IDM, z = the embedded standardized action of each transition, kl = 0"""
+    from h2r.models.jepa import build_model
+
+    cfg = tiny_cfg(conditioning="action", action_encoder={"act_dim": 7, "mlp_dim": 8})
+    model = build_model(cfg).eval()
+    assert model.idm is None
+    model.action_encoder.set_action_stats(torch.randn(100, 7) * 0.01 + 1)
+    emb = model.encode(torch.randint(0, 255, (2, 3, 3, 28, 28)))
+    a = torch.randn(2, 2, 7)
+    z, kl = model.latents(emb, a)
+    assert z.shape == (2, 2, 4) and kl == 0
+    a2 = a.clone()
+    a2[:, 1] += 1
+    z2, _ = model.latents(emb, a2)
+    assert torch.equal(z[:, 0], z2[:, 0]) and not torch.equal(z[:, 1], z2[:, 1])
+    assert model.predict(emb[:, :-1], z).shape == (2, 2, 8)

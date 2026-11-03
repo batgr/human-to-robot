@@ -54,16 +54,28 @@ def windows(episodes, horizon):
     return {k: torch.stack(v) for k, v in out.items()}
 
 
-class ClipDataset(Dataset):
+def all_actions(root, split):
+    """(n, act_dim) every action of a split, e.g. to standardize them"""
+    rows = [a for p in shards(root, split) for a in pq.read_table(p, columns=["actions"]).column(0).to_pylist() if a]
+    return torch.tensor([x for a in rows for x in a])
 
-    def __init__(self, root, split, clip_len=5):
+
+class ClipDataset(Dataset):
+    """Clips of clip_len consecutive frames of every video; actions = True: with the clip_len - 1 real actions between
+    them, from the videos that have actions (the others are left out)"""
+
+    def __init__(self, root, split, clip_len=5, actions=False):
+        columns = ["frames", "actions"] if actions else ["frames"]
         table = pa.concat_tables(
-            pq.read_table(p, columns=["frames"], memory_map=True)
+            pq.read_table(p, columns=columns, memory_map=True)
             for p in shards(root, split)
         )
         self.frames = table.column("frames").combine_chunks()
+        self.actions = table.column("actions").combine_chunks() if actions else None
         self.clip_len = clip_len
         lengths = self.frames.value_lengths().to_numpy()
+        if actions:  # no clip from a video without actions
+            lengths = np.where(self.actions.is_null().to_numpy(zero_copy_only=False), 0, lengths)
 
         self.ends = np.cumsum(np.maximum(lengths - clip_len + 1, 0))
 
@@ -71,7 +83,10 @@ class ClipDataset(Dataset):
         return int(self.ends[-1])
 
     def __getitem__(self, i):
-        """Returns (clip_len, 3, H, W) uint8"""
+        """Returns (clip_len, 3, H, W) uint8, and with actions (clip_len - 1, act_dim) float32"""
         v = int(np.searchsorted(self.ends, i, side="right"))
         s = i - (int(self.ends[v - 1]) if v else 0)
-        return decode(j.as_py() for j in self.frames[v].values[s : s + self.clip_len])
+        frames = decode(j.as_py() for j in self.frames[v].values[s : s + self.clip_len])
+        if self.actions is None:
+            return frames
+        return frames, torch.tensor(self.actions[v].values[s : s + self.clip_len - 1].to_pylist())

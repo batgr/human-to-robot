@@ -29,6 +29,8 @@ class LatentActions:
       rise;
     - transfer_cos: median cosine between the change A's z causes on B (pred - s_t of B) and A's true change, on the
       third of A's transitions that move most in the states: the motion of A, transferred (E3: 0.31 at beta 1e-4);
+    with the real actions in place of the IDM (action-conditioned model) z is the embedded action, and the metrics below
+    that re-infer z from the states (mu_spread_over_sigma, scene_cut, cycle) are left out;
     - scene_cut: error on the last transition when its frame comes from another clip, over the error on the real
       one (Garrido et al. 2026, section 6). A z that carries the whole next frame keeps it near 1; their models
       reach x2.0-2.5;
@@ -59,6 +61,9 @@ class LatentActions:
         }
         for k, v in new.items():
             self.raw[k].append(v.float().flatten().cpu())
+        self.n += b
+        if model.idm is None:  # real actions: nothing to re-infer from the states
+            return
         _, logvar = model.idm.posterior(emb)
         self.sigma += (0.5 * logvar.float()).exp().flatten(0, 1).sum(0)
 
@@ -76,20 +81,23 @@ class LatentActions:
         z_back, _ = model.idm(pairs)  # (B * (T-1), 1, z_dim)
         pred_a = model.predict(emb[:, :-1], z_back.view_as(z))
         self.err_cycle += mse(pred_a, target) * b
-        self.n += b
 
     def compute(self):
         r = {k: torch.cat(v) for k, v in self.raw.items()}
         moving = r["motion_a"] >= r["motion_a"].quantile(2 / 3)
-        sigma = self.sigma.cpu().double() / self.mu.n
-        return {
+        out = {
             "kl": float(self.kl / self.n),
-            "mu_spread_over_sigma": float((self.mu.var().clamp_min(0).sqrt() / sigma).mean()),
             "leak": float(r["leak"].mean()),
             "transfer_cos": float(r["transfer_cos"][moving].median()),
             "active_dims": int((self.mu.var() > 0.01).sum()),
             "rankme": self.mu.rankme(),
             "controllability": float(1 - self.err / self.err_other),
-            "scene_cut": float(self.err_cut / self.err_last),
-            "cycle": float(self.err_cycle / self.err),
         }
+        if torch.is_tensor(self.sigma):  # the IDM's
+            sigma = self.sigma.cpu().double() / self.mu.n
+            out |= {
+                "mu_spread_over_sigma": float((self.mu.var().clamp_min(0).sqrt() / sigma).mean()),
+                "scene_cut": float(self.err_cut / self.err_last),
+                "cycle": float(self.err_cycle / self.err),
+            }
+        return out

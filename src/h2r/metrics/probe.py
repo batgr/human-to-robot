@@ -1,7 +1,7 @@
-"""Linear probes of the hand during training: does the state (and the encoder) keep where the hand is, and the direction
-of the clip? The protocol of where.ipynb: SSv2 validation frames with a tracked hand (MediaPipe), tokens pooled on a
-4 x 4 grid, a shared PCA of 24 dims per region, ridge held out by video (2 folds by video parity, lambda chosen on an
-inner split by video)"""
+"""Linear probes during training: does the state (and the encoder) keep where the hand is and the direction of the clip
+(HandProbe, SSv2), where the robot's end effector is and how it moves (RobotProbe, DROID / sim)? The protocol of
+where.ipynb: tokens pooled on a 4 x 4 grid, a PCA shared by the regions, ridge held out by video (2 folds by video
+parity, lambda chosen on an inner split by video)"""
 
 import numpy as np
 import pyarrow.parquet as pq
@@ -137,3 +137,42 @@ class HandProbe:
                 out[f"{task}_{name}"] = float((torch.sign(pc) == yc).double().mean())
         return out
 
+
+class RobotProbe:
+    """The end effector read from the states of an action-conditioned or latent-action model (DROID, sim), on up to
+    `frames` validation frames t of episodes with states, each with the next frame t + 1, held out by episode:
+    - ee_xyz_r2_{state, encoder}: R² of the end-effector position x, y, z from the frame's features. DROID: in the
+      robot's base frame while the camera moves from scene to scene (H0), so a hard target across episodes;
+    - gripper_r2_{state, encoder}: R² of the gripper closedness, the same under any camera;
+    - dxyz_r2_{state, encoder}, dgripper_r2_{state, encoder}: R² of the action of the transition (t, t + 1), its
+      position delta and gripper delta, from [x_t, x_t+1 - x_t]: does the state show how the robot moves?
+    LeWM reports Pearson r (Push-T agent 0.974 linear, OGBench-Cube block 0.997, gripper 0.938): r 0.97 is R² ~ 0.94.
+    PCA of 64 dims per region (24 for the hand): the CLS state has 192, the gripper may sit in a small direction."""
+
+    def __init__(self, root, frames=3000, seed=0):
+        self.videos = [r for p in shards(root, "val")
+                       for r in pq.read_table(p, columns=["video", "frames", "actions", "states"]).to_pylist()
+                       if r["states"] is not None and r["actions"] is not None]
+        pairs = [(v, t) for v, r in enumerate(self.videos) for t in range(len(r["frames"]) - 1)]
+        pick = np.random.default_rng(seed).choice(len(pairs), min(frames, len(pairs)), replace=False)
+        self.rows = [pairs[i] for i in sorted(pick)]
+        states = torch.tensor(np.array([self.videos[v]["states"][t] for v, t in self.rows]), dtype=torch.float64)
+        actions = torch.tensor(np.array([self.videos[v]["actions"][t] for v, t in self.rows]), dtype=torch.float64)
+        self.targets = {"ee_xyz": states[:, :3], "gripper": states[:, 6:], "dxyz": actions[:, :3], "dgripper": actions[:, 6:]}
+        need = {}
+        for v, t in self.rows:
+            need.setdefault(v, set()).update([t, t + 1])
+        self.need = {v: sorted(ts) for v, ts in need.items()}
+
+    def compute(self, model, device, autocast):
+        feats, row = frame_features(model, self.videos, self.need, device, autocast)
+        now, nxt = [row[(v, t)] for v, t in self.rows], [row[(v, t + 1)] for v, t in self.rows]
+        vid = np.array([v for v, _ in self.rows])
+        out = {}
+        for name, f in feats.items():
+            x = pca(f, torch.ones(len(f), dtype=torch.bool), k=64)
+            inputs = {"frame": x[now], "pair": torch.cat([x[now], x[nxt] - x[now]], 1)}
+            for target, y in self.targets.items():
+                pred = heldout(inputs["pair" if target.startswith("d") else "frame"], y, vid)
+                out[f"{target}_r2_{name}"] = r2(pred, y)
+        return out

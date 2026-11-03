@@ -10,7 +10,7 @@ from einops import rearrange
 from torch import nn
 
 from h2r.models.encoder import FrozenEncoder, ViTEncoder
-from h2r.models.idm import IDM
+from h2r.models.idm import IDM, ActionEncoder
 from h2r.models.module import MLP, ARPredictor, PatchProjector
 
 
@@ -26,6 +26,7 @@ class JEPA(nn.Module):
         history_size=3,
         num_patches=1,
         residual=False,
+        action_encoder=None,
     ):
         super().__init__()
 
@@ -35,7 +36,8 @@ class JEPA(nn.Module):
         self.history_size = history_size  # states seen by the predictor when unrolling
         self.encoder = encoder
         self.predictor = predictor
-        self.idm = idm  # latent actions, fed directly to the predictor
+        self.idm = idm  # latent actions, fed directly to the predictor; None in an action-conditioned model
+        self.action_encoder = action_encoder  # the real actions in place of the IDM's (LeWM); None with an IDM
         self.projector = projector or nn.Identity()
         self.pred_proj = pred_proj or nn.Identity()
 
@@ -54,6 +56,14 @@ class JEPA(nn.Module):
         else:  # patch tokens (drop cls): every one through the MLP, or compressed by the patch projector
             emb = self.projector(tokens[:, 1:])  # (B*T, N, D)
         return rearrange(emb, "(b t) ... -> b t ...", b=b)
+
+    def latents(self, emb, actions=None):
+        """Conditioning of every transition and its KL: the IDM's latent actions inferred from the states, or the
+        real actions embedded (action-conditioned world model, kl = 0)
+        emb: (B, T, D) or (B, T, N, D), actions: (B, T-1, act_dim) -> z: (B, T-1, z_dim), kl: scalar"""
+        if self.action_encoder is not None:
+            return self.action_encoder(actions), emb.new_zeros((), dtype=torch.float32)
+        return self.idm(emb)
 
     def predict(self, emb, z):
         """Predict next state embedding
@@ -110,18 +120,20 @@ def build_model(cfg):
     )
     pred_proj = MLP(**cfg["pred_proj"])
     residual = cfg.get("residual", False)
+    action = cfg.get("conditioning", "idm") == "action"  # runs saved before the key: the IDM
     if residual:  # the change is 0 at init: the model starts as persistence (test.ipynb, 30 Oct.)
         nn.init.zeros_(pred_proj.net[-1].weight)
         nn.init.zeros_(pred_proj.net[-1].bias)
     return JEPA(
         encoder,
         ARPredictor(num_patches=n, **cfg["predictor"]),
-        IDM(num_patches=n, **cfg["idm"]),
+        None if action else IDM(num_patches=n, **cfg["idm"]),
         projector,
         pred_proj,
         history_size=cfg.get("history_size", 3),  # runs saved before the key: 3
         num_patches=n,
         residual=residual,
+        action_encoder=ActionEncoder(z_dim=cfg["predictor"]["cond_dim"], **cfg["action_encoder"]) if action else None,
     )
 
 

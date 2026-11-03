@@ -62,3 +62,28 @@ class IDM(nn.Module):
         mu, logvar = self.head(self.norm(h)).chunk(2, dim=-1)
         logvar = logvar.clamp(-10, 10)
         return tuple(rearrange(v, "(b t) d -> b t d", b=b) for v in (mu, logvar))
+
+
+class ActionEncoder(nn.Module):
+    """The real actions as the predictor's conditioning, in place of the IDM: an action-conditioned world model, as
+    LeWorldModel (its Embedder: a linear map then an MLP, here the MLP on the standardized action). No KL: kl = 0"""
+
+    def __init__(self, *, act_dim, z_dim, mlp_dim=None):
+        super().__init__()
+        mlp_dim = mlp_dim or 4 * z_dim
+        # standardization of the real actions, set from the training actions and saved with the weights
+        self.register_buffer("act_mean", torch.zeros(act_dim))
+        self.register_buffer("act_std", torch.ones(act_dim))
+        self.net = nn.Sequential(nn.Linear(act_dim, mlp_dim), nn.SiLU(), nn.Linear(mlp_dim, z_dim))
+
+    @torch.no_grad()
+    def set_action_stats(self, actions):
+        """actions: (..., act_dim) training actions, in the dataset's units"""
+        a = actions.reshape(-1, actions.size(-1)).float()
+        std = a.std(0)
+        self.act_mean.copy_(a.mean(0))
+        self.act_std.copy_(torch.where(std > 1e-6, std, torch.ones_like(std)))  # constant dims stay unscaled
+
+    def forward(self, actions):
+        """actions: (B, T-1, act_dim) real actions of the transitions -> (B, T-1, z_dim)"""
+        return self.net((actions.float() - self.act_mean) / self.act_std)
