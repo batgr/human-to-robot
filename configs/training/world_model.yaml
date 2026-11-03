@@ -12,6 +12,7 @@ loss:
   beta: 0.0001 # 1e-3 starved z (diagnostics E3): tf/pers 0.75 -> 0.40, z carries motion, not the next frame
   sigreg: 0.09
   rollout_steps: 1 # K, k-step loss of JEPA-WM: tf + L_2 + ... + L_K (their best: 2, last-gradient only); 1 = teacher forcing only (diagnostics E8: K = 2 makes z leak the next frame, 1 % -> 66 %)
+  stop_grad_target: false # true: no gradient of the prediction loss through the target states (AD-E2E-JEPA); LeWM and every run so far: none
   rollout_window: 3 # W_t: states the predictor sees in the rollout steps k > 1 (Terver et al. 2025: 3); W_t < clip_len
 
 iterations: 1000
