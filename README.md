@@ -8,6 +8,9 @@ The current models learn some in-domain dynamics but do **not** yet transfer suc
 
 **Resources:** [iPhone videos](https://huggingface.co/datasets/batgre/h2r-phone) · [Robot videos](https://huggingface.co/datasets/batgre/h2r-robots-1h30) · [Simulation episodes](https://huggingface.co/datasets/batgre/h2r-sim-v3) · [Checkpoints](https://huggingface.co/batgre/h2r-lift)
 
+[Results](#results) · [Analysis](#analysis) · [Run the simulation](#run-the-simulation) ·
+[Reproduce training](#reproduce-training) · [Limitations](#limitations)
+
 ## Run the simulation
 
 Run the pretrained **human-video** model and controller on five held-out Robosuite Panda Lift episodes. No training is needed.
