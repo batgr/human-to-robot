@@ -28,6 +28,11 @@ wandb:
   project: h2r
 
 eval_every: 250
+save_every: 0 # > 0: also step-N.pt every save_every steps, to probe the run over training afterwards
+
+probe: # HandProbe at each validation (h2r.metrics.probe), SSv2 validation videos only
+  hands: null # parquet of video, x, y per frame (tracked hand, NaN where none; where.ipynb); null = no probe
+  frames: 3000 # validation frames with a hand, for the position probe
 best_metric: prediction/tf_over_persistence # best.pt = its lowest validation value. Not loss/total_val: SIGReg weighs
   # as much as tf in it, and tf alone falls when the encoder erases the motion; the ratio rewards a leak (watch latent_action/leak)
 

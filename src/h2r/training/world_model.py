@@ -1,4 +1,5 @@
 import itertools
+import re
 
 import torch
 import torch.nn.functional as F
@@ -6,6 +7,7 @@ from einops import rearrange
 from torch.utils.data import DataLoader
 from h2r.data.dataset import ClipDataset, shards
 from h2r.metrics.latent_actions import LatentActions
+from h2r.metrics.probe import HandProbe
 from h2r.metrics.prediction import PredictionQuality, PredictorInternals, RolloutError
 from h2r.metrics.representation import RepresentationHealth
 from h2r.training.utils import (
@@ -102,6 +104,8 @@ def train(cfg):
     train_loader, val_loader = build_loaders(cfg, device)
     train_iter = forever(train_loader)
     train_probe = list(itertools.islice(train_loader, 2))  # fixed training clips, for the overfitting gap
+    hands = cfg.get("probe", {}).get("hands")  # tracked hands of the validation videos: HandProbe at each validation
+    hand_probe = HandProbe(cfg["data"]["processed_dir"], hands, cfg["probe"]["frames"]) if hands else None
 
     model = build_model(cfg["model"]).to(device)
     sigreg = SIGReg().to(device)
@@ -179,6 +183,9 @@ def train(cfg):
             if val_loader is not None:
                 metrics = evaluate(model, sigreg, val_loader, cfg, device, autocast)
                 metrics["prediction/tf_over_persistence_train"] = train_fit(model, train_probe, device, autocast)
+                metrics |= gradient_shares(model, sigreg, train_probe[0].to(device), cfg, autocast)
+                if hand_probe is not None:
+                    metrics |= {f"probe/{k}": v for k, v in hand_probe.compute(model, device, autocast).items()}
                 log(run_dir, step, metrics, wandb_run)
                 if metrics[best_metric] < best:
                     best = metrics[best_metric]
@@ -188,6 +195,8 @@ def train(cfg):
                         step=step,
                         **{best_metric: best},
                     )
+            if cfg.get("save_every") and step % cfg["save_every"] == 0:  # to probe the run over training afterwards
+                save_checkpoint(run_dir / f"step-{step}.pt", model=trainable_state(model), step=step)
             save_checkpoint(
                 run_dir / "last.pt",
                 model=trainable_state(model),
@@ -258,6 +267,53 @@ def train_fit(model, batches, device, autocast):
         pers += (emb[:, :-1].float() - target).pow(2).mean()
     model.train()
     return float(err / pers)
+
+
+def layer_of(name):
+    """Encoder or projector parameter -> its layer: embeddings, block_1..block_L, final_norm, projector"""
+    if name.startswith("projector"):
+        return "projector"
+    block = re.search(r"\.layers?\.(\d+)\.", name)  # transformers 5: model.layers.i, 4: model.encoder.layer.i
+    if block:
+        return f"block_{int(block.group(1)) + 1}"
+    return "embeddings" if "embeddings" in name else "final_norm"
+
+
+def gradient_shares(model, sigreg, clip, cfg, autocast):
+    """Which loss term moves the encoder and the projector, on one training batch (where.ipynb part 5: SIGReg gave 92 %
+    of the encoder's gradient on the long CLS run, 100 % on patch16, tf opposed to it):
+    - share_tf_<layer>: <g_pred, g> / |g|^2, g_pred the gradient of the prediction terms (tf and the rollout terms),
+      g that of the whole loss; the shares of prediction, SIGReg and KL sum to 1, so SIGReg's is about 1 - this;
+    - cos_tf_sigreg: cosine of the two gradients over the whole encoder (< 0: they pull against each other);
+    - norm_tf, norm_sigreg: their norms over the whole encoder (weighted terms, before clipping).
+    Adam rescales each parameter: the norms are not the update sizes, the shares give its direction."""
+    named = [(n, p) for n, p in model.named_parameters() if p.requires_grad and n.startswith(("encoder", "projector"))]
+    with autocast:
+        out = losses(model, sigreg, model.encode(clip), cfg)
+    terms = {
+        "tf": out["tf"] + sum(v for k, v in out.items() if k.startswith("rollout")),
+        "sigreg": cfg["loss"]["sigreg"] * out["sigreg"],
+        "kl": cfg["loss"]["beta"] * out["kl"],
+    }
+    grads = {}
+    for i, (k, term) in enumerate(terms.items()):
+        g = torch.autograd.grad(term, [p for _, p in named], retain_graph=i < len(terms) - 1, allow_unused=True)
+        grads[k] = [torch.zeros_like(p).flatten() if gi is None else gi.flatten() for gi, (_, p) in zip(g, named)]
+    layers = {}
+    for i, (n, _) in enumerate(named):
+        layers.setdefault(layer_of(n), []).append(i)
+    if any(n.startswith("encoder") for n, _ in named):
+        layers["encoder"] = [i for i, (n, _) in enumerate(named) if n.startswith("encoder")]
+    metrics = {}
+    for layer, idx in layers.items():
+        g = {k: torch.cat([v[i] for i in idx]).float() for k, v in grads.items()}
+        total = sum(g.values())
+        metrics[f"grads/share_tf_{layer}"] = float(g["tf"] @ total / total.square().sum().clamp_min(1e-30))
+    if "encoder" in layers:
+        g = {k: torch.cat([v[i] for i in layers["encoder"]]).float() for k, v in grads.items()}
+        metrics["grads/cos_tf_sigreg"] = float(F.cosine_similarity(g["tf"], g["sigreg"], dim=0))
+        metrics["grads/norm_tf"], metrics["grads/norm_sigreg"] = float(g["tf"].norm()), float(g["sigreg"].norm())
+    return metrics
 
 
 def train_step(model, sigreg, clip, opt, sched, params, cfg, autocast):

@@ -281,9 +281,9 @@ class MLP(nn.Module):
 
     def forward(self, x):
         """
-        x: (B*T, D)
+        x: (..., D), e.g. (B*T, D) a CLS token or (B*T, N, D) every patch token (BatchNorm over all of them)
         """
-        return self.net(x)
+        return self.net(x.flatten(0, -2)).unflatten(0, x.shape[:-1])
 
 
 class PatchProjector(nn.Module):

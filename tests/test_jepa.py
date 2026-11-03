@@ -126,3 +126,32 @@ def test_patch_projector_grid():
     from h2r.models.module import PatchProjector
 
     assert PatchProjector(8, 12, 16)(torch.randn(3, 256, 8)).shape == (3, 16, 16)
+
+
+def tiny_cfg(**model):
+    enc = {"type": "vit", "image_size": 28, "patch_size": 14, "dim": 8, "depth": 1, "heads": 2}  # 2 x 2 patches
+    return {"encoder": enc, "projector": {"hidden_dim": 16, "output_dim": 8},
+            "predictor": {"input_dim": 8, "hidden_dim": 8, "cond_dim": 4, "depth": 1, "heads": 2, "dim_head": 4, "mlp_dim": 16},
+            "pred_proj": {"input_dim": 8, "hidden_dim": 16, "output_dim": 8}, "idm": {"dim": 8, "z_dim": 4, "depth": 1, "heads": 2}} | model
+
+
+def test_every_patch_token_through_the_mlp():
+    """num_patches = the encoder's grid: one state token per patch, the MLP projector on each"""
+    from h2r.models.jepa import build_model
+    from h2r.models.module import MLP
+
+    model = build_model(tiny_cfg(num_patches=4)).eval()
+    assert isinstance(model.projector, MLP)
+    emb = model.encode(torch.randint(0, 255, (2, 3, 3, 28, 28)))
+    assert emb.shape == (2, 3, 4, 8)
+    z, _ = model.idm(emb)
+    assert model.predict(emb[:, :-1], z).shape == (2, 2, 4, 8)
+
+
+def test_residual_predictor_starts_as_persistence():
+    from h2r.models.jepa import build_model
+
+    model = build_model(tiny_cfg(residual=True)).eval()
+    emb = model.encode(torch.randint(0, 255, (2, 3, 3, 28, 28)))
+    z, _ = model.idm(emb)
+    assert torch.equal(model.predict(emb[:, :-1], z), emb[:, :-1])
