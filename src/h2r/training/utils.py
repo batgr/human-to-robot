@@ -61,8 +61,14 @@ def init_wandb(cfg, run_dir):
         return None
     import wandb
 
-    return wandb.init(project=cfg["wandb"]["project"], name=run_dir.name, id=run_dir.name,
-                      resume="allow", config=cfg, dir=run_dir)
+    return wandb.init(
+        project=cfg["wandb"]["project"],
+        name=run_dir.name,
+        id=run_dir.name,
+        resume="allow",
+        config=cfg,
+        dir=run_dir,
+    )
 
 
 def forever(loader):
@@ -79,6 +85,40 @@ def warmup_cosine(warmup, total):
         return 0.5 * (1 + math.cos(math.pi * (step - warmup) / (total - warmup)))
 
     return f
+
+
+def build_optimizer(model, optim, iterations):
+    """AdamW (no weight decay on biases, norms, embeddings and learned queries) and its warmup-cosine schedule;
+    optim: lr, weight_decay, warmup (share of the iterations)"""
+    decay, no_decay = [], []
+    for name, p in model.named_parameters():
+        if not p.requires_grad:
+            continue  # frozen encoder
+        if p.ndim < 2 or name.endswith(("pos_embedding", "query", "cls_token", "position_embeddings")):
+            no_decay.append(p)
+        else:
+            decay.append(p)
+    opt = torch.optim.AdamW(
+        [{"params": decay, "weight_decay": optim["weight_decay"]}, {"params": no_decay, "weight_decay": 0.0}],
+        lr=optim["lr"],
+    )
+    schedule = warmup_cosine(int(optim["warmup"] * iterations), iterations)
+    return opt, torch.optim.lr_scheduler.LambdaLR(opt, schedule)
+
+
+def save_figures(figs, run_dir, step, wandb_run=None, prefix="figures"):
+    """{name: matplotlib figure} -> name.png in the run directory, and W&B images under prefix/; the figures are
+    closed"""
+    from matplotlib import pyplot as plt
+
+    for name, fig in figs.items():
+        fig.savefig(Path(run_dir) / f"{name}.png", dpi=120)
+    if wandb_run is not None:
+        import wandb
+
+        wandb_run.log({f"{prefix}/{k}": wandb.Image(f) for k, f in figs.items()}, step=step)
+    for fig in figs.values():
+        plt.close(fig)
 
 
 def peak_memory_gb(device):
@@ -102,12 +142,15 @@ def grad_norms(model):
 
 def update_ratios(model, before):
     """log10 of std(update) / std(weight) for one optimizer step, median over the weight matrices of each top-level
-    module (cs231n: about -3; far below, the module no longer learns). before: the matrices before the step"""
+    module (cs231n: about -3; far below, the module no longer learns). before: the matrices before the step
+    """
     ratios = {}
     for name, p in model.named_parameters():
         if name in before and before[name].float().std() > 0:
             r = (p.detach() - before[name]).float().std() / before[name].float().std()
-            ratios.setdefault(name.split(".")[0], []).append(r.clamp_min(1e-12).log10().item())
+            ratios.setdefault(name.split(".")[0], []).append(
+                r.clamp_min(1e-12).log10().item()
+            )
     return {f"update_ratio_{k}": float(np.median(v)) for k, v in ratios.items()}
 
 

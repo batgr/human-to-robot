@@ -21,12 +21,6 @@ planning: # offline planning to a goal frame on the test episodes, CEM of Garrid
   iterations: 15
   init_std: 1.0 # CEM starts at N(0, init_std) in standardized actions (Garrido et al.: zero mean, unit variance)
   bounds: [0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.75] # |action| per dimension in the dataset's units, the candidates clipped (Terver et al.: max_norms 0.1 on xyz and rotations, 0.75 on the gripper); null = unbounded
-analysis: # do the latent actions name the real action (diagnostics E11 A), what each action dimension does (E11 B)
-  max_points: 20000 # transitions per split for the class probes
-  gripper_change: 0.1 # |Δ closedness| above which a step closes or opens the gripper
-  still_xyz: 0.005 # m per step (2 cm/s): a window is still when every step moves the end effector less
-  counterfactual_states: 2000
-  trajectories: 6 # test windows drawn in the PCA of the real states
 iterations: 3000 # Garrido et al. 2026, appendix A
 batch_size: 256
 log_every: 100

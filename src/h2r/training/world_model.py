@@ -7,10 +7,11 @@ from einops import rearrange
 from torch.utils.data import DataLoader
 from h2r.data.dataset import ClipDataset, shards
 from h2r.metrics.latent_actions import LatentActions
-from h2r.metrics.probe import HandProbe
+from h2r.metrics.probe import HandProbe, MotionProbe
 from h2r.metrics.prediction import PredictionQuality, PredictorInternals, RolloutError
 from h2r.metrics.representation import RepresentationHealth
 from h2r.training.utils import (
+    build_optimizer,
     grad_norms,
     init_wandb,
     pick_device,
@@ -18,7 +19,6 @@ from h2r.training.utils import (
     make_autocast,
     make_run_dir,
     forever,
-    warmup_cosine,
     peak_memory_gb,
     log,
     rng_state,
@@ -58,32 +58,6 @@ def build_loaders(cfg, device):
     return train, val
 
 
-def build_optimizer(model, cfg):
-    """AdamW, no weight decay on biases, norms and embeddings"""
-    optim = cfg["optim"]
-    decay, no_decay = [], []
-    for name, p in model.named_parameters():
-        if not p.requires_grad:
-            continue  # frozen encoder
-        if p.ndim < 2 or name.endswith(
-            ("pos_embedding", "query", "cls_token", "position_embeddings")
-        ):
-            no_decay.append(p)
-        else:
-            decay.append(p)
-    opt = torch.optim.AdamW(
-        [
-            {"params": decay, "weight_decay": optim["weight_decay"]},
-            {"params": no_decay, "weight_decay": 0.0},
-        ],
-        lr=optim["lr"],
-    )
-    schedule = warmup_cosine(
-        int(optim["warmup"] * cfg["iterations"]), cfg["iterations"]
-    )
-    return opt, torch.optim.lr_scheduler.LambdaLR(opt, schedule)
-
-
 def trainable_state(model):
     """State dict without the frozen weights (a frozen encoder reloads from the Hub), buffers kept"""
     frozen = {n for n, p in model.named_parameters() if not p.requires_grad}
@@ -106,11 +80,13 @@ def train(cfg):
     train_probe = list(itertools.islice(train_loader, 2))  # fixed training clips, for the overfitting gap
     hands = cfg.get("probe", {}).get("hands")  # tracked hands of the validation videos: HandProbe at each validation
     hand_probe = HandProbe(cfg["data"]["processed_dir"], hands, cfg["probe"]["frames"]) if hands else None
+    videos = cfg.get("probe", {}).get("videos")  # whole validation videos: MotionProbe at each validation
+    motion_probe = MotionProbe(cfg["data"]["processed_dir"], videos, hands) if videos and val_loader is not None else None
 
     model = build_model(cfg["model"]).to(device)
     sigreg = SIGReg().to(device)
     params = [p for p in model.parameters() if p.requires_grad]
-    opt, sched = build_optimizer(model, cfg)
+    opt, sched = build_optimizer(model, cfg["optim"], cfg["iterations"])
 
     best_metric = cfg.get("best_metric", "loss/total_val")  # runs saved before the key: the validation loss
     start, best = 1, float("inf")  # lowest best_metric so far
@@ -186,6 +162,8 @@ def train(cfg):
                 metrics |= gradient_shares(model, sigreg, train_probe[0].to(device), cfg, autocast)
                 if hand_probe is not None:
                     metrics |= {f"probe/{k}": v for k, v in hand_probe.compute(model, device, autocast).items()}
+                if motion_probe is not None:
+                    metrics |= {f"motion_probe/{k}": v for k, v in motion_probe.compute(model, device, autocast).items()}
                 log(run_dir, step, metrics, wandb_run)
                 if metrics[best_metric] < best:
                     best = metrics[best_metric]
