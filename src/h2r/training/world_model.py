@@ -148,6 +148,7 @@ def train(cfg):
                 **{f"optim/{k}": v for k, v in m.items() if k.startswith("gnorm")},
                 "optim/clipped": m["clipped"],  # share of the steps whose gradient was clipped
                 **{f"optim/{k}": v for k, v in update_ratios(model, before).items()},
+                "system/epoch": step / len(train_loader),
                 "system/clips_per_s": n * cfg["batch_size"] / elapsed,
                 "system/step_s": elapsed / n,
                 "system/data_s": data_time / n,
