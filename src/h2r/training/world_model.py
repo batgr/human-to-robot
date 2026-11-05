@@ -115,8 +115,10 @@ def train(cfg):
 
     model.train()
     sums, data_time, t0 = {}, 0.0, time.time()
+    teacher_forcing = {**cfg, "loss": {**cfg["loss"], "rollout_steps": 1}}
 
     for step in range(start, cfg["iterations"] + 1):
+        step_cfg = cfg if step >= cfg["loss"].get("rollout_from", 0) else teacher_forcing
 
         t = time.time()
         clip = next(train_iter).to(device, non_blocking=True)
@@ -125,7 +127,7 @@ def train(cfg):
         logging = step % cfg["log_every"] == 0
         if logging:  # the weight matrices before the step, for the update ratios
             before = {n: p.detach().clone() for n, p in model.named_parameters() if p.requires_grad and p.ndim == 2}
-        out = train_step(model, sigreg, clip, opt, sched, params, cfg, autocast)
+        out = train_step(model, sigreg, clip, opt, sched, params, step_cfg, autocast)
         for k, v in out.items():
             sums[k] = sums.get(k, 0) + v.detach()
 
@@ -157,9 +159,9 @@ def train(cfg):
         if step % cfg["eval_every"] == 0 or step == cfg["iterations"]:
             t_eval = time.time()
             if val_loader is not None:
-                metrics = evaluate(model, sigreg, val_loader, cfg, device, autocast)
+                metrics = evaluate(model, sigreg, val_loader, step_cfg, device, autocast)
                 metrics["prediction/tf_over_persistence_train"] = train_fit(model, train_probe, device, autocast)
-                metrics |= gradient_shares(model, sigreg, train_probe[0].to(device), cfg, autocast)
+                metrics |= gradient_shares(model, sigreg, train_probe[0].to(device), step_cfg, autocast)
                 if hand_probe is not None:
                     metrics |= {f"probe/{k}": v for k, v in hand_probe.compute(model, device, autocast).items()}
                 if motion_probe is not None:
