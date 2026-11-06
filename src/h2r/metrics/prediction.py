@@ -134,7 +134,7 @@ class RolloutError:
     its own predictions in a window of history_size states (W_p), with the IDM's latent actions (mu) of the true transitions.
     - error_h{h}: MSE of the state h steps ahead, h = 1..T-1;
     - persistence_h{h}: MSE of copying the first state (s_0 for s_h), the level to beat;
-    - skill_h{h} = 1 - error_h{h} / persistence_h{h}: 0 = as good as copying, 1 = perfect;
+    - gain_over_persistence_h{h} = 1 - error_h{h} / persistence_h{h}: 0 = as good as copying, 1 = perfect;
     - growth_h{h} = error_h{h} / error_h{h-1}: growth of the error per step (the effective Lipschitz constant of the
       unrolled predictor, their section D), which the rollout loss should lower.
     """
@@ -154,7 +154,7 @@ class RolloutError:
         err, pers = (self.err / self.n).tolist(), (self.persistence / self.n).tolist()
         out = {}
         for h, (e, p) in enumerate(zip(err, pers), start=1):
-            out |= {f"error_h{h}": e, f"persistence_h{h}": p, f"skill_h{h}": 1 - e / p}
+            out |= {f"error_h{h}": e, f"persistence_h{h}": p, f"gain_over_persistence_h{h}": 1 - e / p}
             if h > 1:
                 out[f"growth_h{h}"] = e / err[h - 2]
         return out

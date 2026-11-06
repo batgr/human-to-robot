@@ -125,15 +125,18 @@ def build_model(cfg):
     )
 
 
-def load_world_model(run_dir, device):
-    """Frozen world model of a training run (config.yaml + best.pt)"""
+def load_world_model(run_dir, device, checkpoint="best.pt"):
+    """Frozen world model of a training run (config.yaml + a checkpoint)"""
     run_dir = Path(run_dir)
-    if not (run_dir / "best.pt").exists():
-        raise FileNotFoundError(f"world_model: no best.pt in {run_dir}")
+    if not (run_dir / checkpoint).exists():
+        raise FileNotFoundError(f"world_model: no {checkpoint} in {run_dir}")
     cfg = yaml.safe_load(open(run_dir / "config.yaml"))
     model = build_model(cfg["model"]).to(device)
     model.load_state_dict(
-        torch.load(run_dir / "best.pt", map_location=device)["model"], strict=False
+        torch.load(run_dir / checkpoint, map_location=device, weights_only=False)[
+            "model"
+        ],
+        strict=False,
     )
     model.eval().requires_grad_(False)
     return model, cfg

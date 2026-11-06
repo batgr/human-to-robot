@@ -11,7 +11,7 @@ from PIL import Image
 from test_jepa import small_model
 
 from h2r.data.dataset import windows
-from h2r.metrics.control import ControlledRollout, PlanningError, plan
+from h2r.metrics.control import ControlledRollout
 from h2r.models.controller import Controller
 
 
@@ -26,37 +26,6 @@ def test_rollout_with_the_true_latent_actions_matches_the_idm():
     for h in range(1, H + 1):
         assert out[f"error_h{h}"] == pytest.approx(out[f"error_idm_h{h}"], rel=1e-5)
         assert out[f"error_ratio_h{h}"] == pytest.approx(1, rel=1e-5)
-
-
-def test_planning_error_is_zero_for_the_true_actions():
-    true = torch.randn(5, 3, 7)
-    error = PlanningError()
-    error.update(true.clone(), true)
-    assert error.compute()["dxyz"] == pytest.approx(0)
-    error = PlanningError()
-    error.update(torch.zeros_like(true), true)
-    assert error.compute()["dxyz"] == pytest.approx(true[..., :3].sum(1).abs().sum(-1).mean().item(), rel=1e-5)
-
-
-def test_cem_gets_closer_to_the_goal_than_no_action():
-    """The goal is reached by known actions through the same controller and world model: the plan's cost is below
-    the cost of the mean action"""
-    model, D = small_model()
-    torch.manual_seed(0)
-    ctrl = Controller(dim=D, z_dim=D, act_dim=7, mlp_dim=32).eval()
-    torch.nn.init.normal_(ctrl.head.weight, std=0.5)
-    start, true = torch.randn(4, D), torch.randn(4, 3, 7)
-    cost = lambda acts: (model.rollout(start[:, None], start.new_zeros(4, 0, D), acts[:, None], ctrl)[:, 0, -1]
-                         - goal).pow(2).sum(-1)
-    goal = model.rollout(start[:, None], start.new_zeros(4, 0, D), true[:, None], ctrl)[:, 0, -1]
-    planned = plan(model, ctrl, start[:, None], start.new_zeros(4, 0, D), goal, horizon=3, samples=64, elites=8,
-                   iterations=5, generator=torch.Generator().manual_seed(0))
-    assert planned.shape == (4, 3, 7)
-    assert (cost(planned) < cost(torch.zeros_like(true))).all()
-    bounds = torch.tensor([0.1] * 6 + [0.75])
-    bounded = plan(model, ctrl, start[:, None], start.new_zeros(4, 0, D), goal, horizon=3, samples=64, elites=8,
-                   iterations=2, generator=torch.Generator().manual_seed(0), bounds=bounds)
-    assert (bounded.abs() <= bounds + 1e-6).all()
 
 
 def test_windows_cut_episodes_without_overlap():
@@ -124,19 +93,16 @@ def test_train_controller_end_to_end(tiny_runs):
     tmp, wm = tiny_runs
     cfg = load("configs/training/controller.yaml")
     cfg |= {"world_model": str(wm), "output_dir": str(tmp / "out"), "precision": "fp32", "horizon": 3,
-            "iterations": 4, "batch_size": 8, "log_every": 2, "eval_every": 2,
-            "planning": {"videos": 2, "clips_per_video": 2, "context": 2, "horizon": 2, "samples": 8, "elites": 2,
-                         "iterations": 2, "init_std": 1.0, "bounds": [0.1] * 6 + [0.75]}}
+            "iterations": 4, "batch_size": 8, "log_every": 2, "eval_every": 2}
     cfg["model"]["mlp_dim"] = 32
     cfg["data"] |= {"root": str(tmp / "sim"), "cache": str(tmp / "cache")}
     train(cfg)
 
     run = next((tmp / "out").iterdir())
     lines = [json.loads(line) for line in open(run / "metrics.jsonl")]
-    test = next(line for line in lines if "test/loss" in line)
+    test = next(line for line in lines if "test_sim/loss" in line)  # test_<name of the data root>, one per test set
     assert any("val/loss" in line for line in lines)
-    assert {"test/loss", "test_rollout/error_h3", "test_rollout/error_idm_h3", "test_rollout/error_ratio_h3",
-            "test_planning/dxyz", "test_planning/clips"} <= test.keys()
+    assert {"test_sim/loss", "test_sim_rollout/error_h3", "test_sim_rollout/error_idm_h3", "test_sim_rollout/error_ratio_h3"} <= test.keys()
     assert (tmp / "cache" / "wm-tiny" / "sim-train.pt").exists()
     model, ctrl = load_controller(run, torch.device("cpu"))
     assert not any(p.requires_grad for p in ctrl.parameters())

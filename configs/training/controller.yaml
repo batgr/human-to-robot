@@ -1,26 +1,18 @@
 name: ctrl
 seed: 0
 model: configs/models/controller.yaml
-world_model: null # run of the world model (config.yaml + best.pt), frozen: the controller belongs to it
+world_model: null # run of the world model, frozen: the controller belongs to it
+checkpoint: best.pt # of that run
 output_dir: outputs
 precision: bf16
 
 data:
-  root: data/h2r-droid/
+  root: data/h2r-droid/ # or a list, with hf_repo: one controller on the episodes of all of them
   hf_repo: batgre/h2r-droid # DROID (Garrido et al. 2026), 10 h of the left exterior camera at 4 fps (configs/data/droid.yaml); sim: batgre/h2r-sim-v3, root data/h2r-sim/
+  test_root: null # datasets of the test metrics, test_<folder>/; null = root
   cache: data/cache # states and latent actions, encoded once per world model run and split
 
 horizon: 7 # open-loop steps of the rollout metrics, as the world model's (clips of 8 frames)
-planning: # offline planning to a goal frame on the test episodes, CEM of Garrido et al. 2026 (appendix A), DROID config of Terver et al. 2025
-  videos: 16 # test episodes (Garrido et al.: 16 validation videos)
-  clips_per_video: 4 # 16 x 4 = 64 clips, random starts
-  context: 2 # real states before planning (Terver et al.: ctxt2)
-  horizon: 3 # actions planned, the goal is the frame after them
-  samples: 300
-  elites: 10
-  iterations: 15
-  init_std: 1.0 # CEM starts at N(0, init_std) in standardized actions (Garrido et al.: zero mean, unit variance)
-  bounds: [0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.75] # |action| per dimension in the dataset's units, the candidates clipped (Terver et al.: max_norms 0.1 on xyz and rotations, 0.75 on the gripper); null = unbounded
 iterations: 3000 # Garrido et al. 2026, appendix A
 batch_size: 256
 log_every: 100

@@ -28,14 +28,11 @@ def download(repo, root):
                           allow_patterns=["frames/*", "manifest.parquet", "config.yaml"])
 
 
-def read_episodes(root, split):
-    """Videos of a split that have actions: [{"video", "frames": JPEG bytes, "actions": (T - 1, act_dim)}], and
-    "states": (T, state_dim) the absolute state at each frame when the shards have it"""
-    rows = []
-    for p in shards(root, split):
-        columns = [c for c in ["video", "frames", "actions", "states"] if c in pq.read_schema(p).names]
-        rows += pq.read_table(p, columns=columns).to_pylist()
-    return [r for r in rows if r["actions"] is not None]
+def read_episodes(shard):
+    """Videos of a shard that have actions: [{"video", "frames": JPEG bytes, "actions": (T - 1, act_dim)}], and
+    "states": (T, state_dim) the absolute state at each frame when the shard has it"""
+    columns = [c for c in ["video", "frames", "actions", "states"] if c in pq.read_schema(shard).names]
+    return [r for r in pq.read_table(shard, columns=columns).to_pylist() if r["actions"] is not None]
 
 
 def windows(episodes, horizon):

@@ -98,9 +98,13 @@ class Attention(nn.Module):
         drop = self.dropout if self.training else 0.0
         qkv = self.to_qkv(x).chunk(3, dim=-1)  # q, k, v: (B, heads, L, dim_head)
         q, k, v = (rearrange(t, "b t (h d) -> b h t d", h=self.heads) for t in qkv)
-        frame = torch.arange(x.size(1), device=x.device) // frame_size  # frame index per token
+        frame = (
+            torch.arange(x.size(1), device=x.device) // frame_size
+        )  # frame index per token
         q, k = rope(q, frame), rope(k, frame)
-        mask = frame[:, None] >= frame[None, :] if causal else None  # see all tokens of past frames
+        mask = (
+            frame[:, None] >= frame[None, :] if causal else None
+        )  # see all tokens of past frames
         out = F.scaled_dot_product_attention(q, k, v, attn_mask=mask, dropout_p=drop)
         out = rearrange(out, "b h t d -> b t (h d)")
         return self.to_out(out)
@@ -131,8 +135,12 @@ class CrossAttention(nn.Module):
         q, k, v = (
             rearrange(t, "b t (h d) -> b h t d", h=self.heads) for t in (q, k, v)
         )
-        frame = torch.arange(context.size(1), device=x.device) // frame_size  # frame index per context token
-        q_frame = frame.new_full((x.size(1),), context.size(1) // frame_size)  # queries come after the context
+        frame = (
+            torch.arange(context.size(1), device=x.device) // frame_size
+        )  # frame index per context token
+        q_frame = frame.new_full(
+            (x.size(1),), context.size(1) // frame_size
+        )  # queries come after the context
         q, k = rope(q, q_frame), rope(k, frame)
         out = F.scaled_dot_product_attention(q, k, v, dropout_p=drop)
         out = rearrange(out, "b h t d -> b t (h d)")
@@ -227,9 +235,7 @@ class Transformer(nn.Module):
         )
 
         self.cond_proj = (
-            nn.Linear(cond_dim, hidden_dim)
-            if cond_dim != hidden_dim
-            else nn.Identity()
+            nn.Linear(cond_dim, hidden_dim) if cond_dim != hidden_dim else nn.Identity()
         )
 
         self.output_proj = (
@@ -358,6 +364,8 @@ class ARPredictor(nn.Module):
             return self.transformer(self.dropout(x), c)
         n = x.size(2)
         x = rearrange(x + self.pos_embedding, "b t n d -> b (t n) d")
-        c = repeat(c, "b t d -> b (t n) d", n=n)  # same action for every token of a frame
+        c = repeat(
+            c, "b t d -> b (t n) d", n=n
+        )  # same action for every token of a frame
         x = self.transformer(self.dropout(x), c, frame_size=n)
         return rearrange(x, "b (t n) d -> b t n d", n=n)
