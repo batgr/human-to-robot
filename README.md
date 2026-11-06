@@ -36,6 +36,15 @@ Metrics used throughout, all on held-out validation videos:
 
 Unless stated otherwise: batch 128, lr 1e-4, KL weight β 1e-4, SIGReg λ 0.09, one seed.
 
+Data, split by whole video or episode:
+
+| Dataset | Content | Used for |
+|---|---|---|
+| SSv2 10 h | 20 action classes | World model |
+| SSv2 20 h | 19,301 videos, 168 action classes (classes where the camera moves are left out) | World model |
+| [DROID](https://huggingface.co/datasets/batgre/h2r-droid) | 10 h of real robot episodes, left exterior camera, with actions | World model control, controller |
+| [Robosuite](https://huggingface.co/datasets/batgre/h2r-sim-v3) | Panda Lift, 1,100 scripted and 1,100 random episodes, with actions | Controller |
+
 ### 1. Does the latent action carry the prediction?
 
 1,000 steps on 5 h of SSv2, the normal model against z = 0.
@@ -89,7 +98,7 @@ Nested SSv2 subsets, 3,000 steps each.
 - **Measured:** with K = 2, every prediction metric improves (7-step gain over persistence, 1 - error / persistence: 0.68 → 0.96). The leak rises from 1 % to 66 %.
 - **Inferred:** the predictor reads its own noisy prediction while z comes from an IDM that sees the true future. Putting the future into z is the cheapest way down the loss. These gains rely on that leak, which is unavailable at planning time.
 - **Measured:** two fixes bring the leak back to about 3 %: starting K = 2 at step 500 (E9), or applying the term to the predictor only (E10).
-- **How we use it:** leak is now a hard constraint before ranking any model on prediction metrics.
+- **How we use it:** leak is now a hard constraint before ranking any model on prediction metrics. Experiment 11 shows that this 3 % overstates the fix.
 
 ### 6. Long training, and the positive control on robot video
 
@@ -149,7 +158,7 @@ SIGReg tests whether a set of states looks Gaussian (a Gaussian set scores 1.05)
 
 ### 10. Does a stop-gradient on the target help?
 
-Patch-16 states (a 4 × 4 grid), stop-gradient on the target as in AD-E2E-JEPA, compared with the long CLS run (same schedule). Run in progress, shown up to step 6,500.
+Patch-16 states (a 4 × 4 grid), stop-gradient on the target as in AD-E2E-JEPA, compared with the long CLS run (same schedule). The run stopped near step 9,500 and is shown up to step 6,500.
 
 ![Stop-gradient run against the CLS run](docs/figures/experiments/stop-gradient.png)
 
@@ -164,3 +173,83 @@ To find the cause, we measured the checkpoints at steps 1,500, 2,000 and 4,000 o
 - **Measured:** the states stay close to pixels. A 2-pixel shift moves them by 40–57 % of a real time step, against 20–25 % for the trained baselines and 69 % for an untrained encoder.
 - **Inferred:** the target path is what makes an encoder trained from scratch predictable. AD-E2E-JEPA can use a stop-gradient because its encoder is a frozen DINOv3.
 - **Untested:** a stop-gradient with a frozen encoder, an EMA target, or a partial target gradient.
+
+### 11. How much does the leak metric hide?
+
+Audit of `leak` on the saved checkpoints of experiments 5 and 6: 1,024 validation clips, means over 3 seeds (one long run). A is the clip that gives z, B the clip that receives it, C an unrelated clip.
+
+| Measure | K = 1 | K = 2 | K = 2 from step 500 | Predictor only | Long K = 1 |
+|---|---|---|---|---|---|
+| leak | 0.011 | 0.662 | 0.034 | 0.031 | 0.007 |
+| prediction closer to A than to C (0.5 = nothing of A) | 0.572 | 0.853 | 0.678 | 0.691 | 0.503 |
+| part of the move that belongs to A (α_A − α_C) | 0.040 | 0.252 | 0.090 | 0.093 | 0.003 |
+
+- **Measured:** `leak` only fires past halfway from B to A, so it is blind to everything below. The fix looks like a 95 % reduction by `leak`, and 64 % by α_A − α_C.
+- **Measured:** the long K = 1 run has no content specific to A (interval 0.479–0.527 around 0.5).
+- **How we use it:** both threshold-free measures now run at every validation (`latent_action/leak_a_vs_c`, `leak_alpha`).
+
+### 12. Long training on 20 h of all classes
+
+20,000 steps on SSv2 20 h, K = 2 from step 1,050, β 3e-4.
+
+Measured at the end of the run:
+- error / persistence 0.0135, 7-step gain over persistence 0.987, controllability 0.99;
+- leak 0.015, but prediction closer to A than to C 0.572, so some content of A remains;
+- hand R² from the encoder 0.08;
+- action class from z 0.015 (chance 0.006).
+
+**Untested:** the gap with experiment 6 could come from K, β or the data. Only a K = 1 run on the same data and β can tell.
+
+### 13. Do the states separate datasets or actions?
+
+4,148 clips from 11 sources for the datasets, 5,040 SSv2 clips for the classes. Share of the 10 nearest clips with the same label.
+
+| Space | Same source (chance about 0.14) | Same action class (chance 0.006) |
+|---|---|---|
+| Pixels | 0.75 | 0.013 |
+| Untrained encoder | 0.79 | 0.012 |
+| Trained encoders | 0.81–0.85 | 0.013–0.017 |
+
+- **Measured:** an untrained network already separates the sources, so most of this separation is not learned.
+- **Measured:** the states do not group by action class. The model trained on DROID alone matches the SSv2 models on SSv2 classes.
+
+### 14. Do real robot actions drive the model?
+
+One controller per world model and dataset, 100,000 steps. Seven open-loop steps on test episodes, 100 pairs of clips on simulation and 61 on DROID. Cosine between the imagined path and the real one, with z from the IDM or from the controller and the real actions.
+
+| World model | Simulation, IDM | Simulation, controller | DROID, IDM | DROID, best controller |
+|---|---|---|---|---|
+| SSv2 10 h | 0.81 | 0.50 | 0.69 | ≤ 0.09 |
+| SSv2 20 h | 0.94 | 0.69 | 0.83 | ≤ 0.09 |
+
+- **Measured:** a model trained on human video follows a simulated robot in part with its real actions. On DROID, no controller drives it, even the one trained on DROID, while z from the IDM does.
+- **Measured:** the world model trained on DROID does worse than the SSv2 models: IDM 0.14 on simulation, 0.50 on DROID.
+- **Measured:** against a still state after 7 steps, only the 20 h model on simulation wins (error 0.023 against 0.030; IDM 0.005).
+- **Measured:** the ratio to the IDM misleads. On the DROID world model it reaches 1.0–1.6 only because z has no effect.
+
+### 15. Does a move transfer from one clip to another?
+
+The command of A runs on B, on the same pairs as experiment 14. Cosine with the path of A, then with the path of an unrelated clip C.
+
+| Command | Simulation, 10 h | Simulation, 20 h | DROID, 10 h | DROID, 20 h |
+|---|---|---|---|---|
+| z of A | 0.77 / 0.03 | 0.60 / −0.02 | 0.13 | 0.09 |
+| Actions of A, through the controller | 0.14 / 0.03 | 0.17 / −0.01 | ≈ 0 | ≈ 0 |
+
+- **Measured:** the actions of A move B only weakly, and the intervals for A and C touch.
+- **Inferred:** the controller's path follows the state more than the action. A controller given the state alone would measure this (untested).
+- **Inferred:** z works inside the single simulated scene, not across DROID scenes. In one scene, a real transfer and a leak look the same, so this does not prove that z is an action.
+
+### 16. Does planning beat doing nothing?
+
+Offline CEM over 3 actions toward a goal state, on 64 test clips. Δxyz is the L1 error on the total move; a zero plan is not moving at all.
+
+| Data | Controllers | Zero plan, same 64 clips | Zero plan, all clips | Move of another clip |
+|---|---|---|---|---|
+| DROID | 0.24–0.42 | 0.132 | 0.094 | 0.145 |
+| Simulation | 0.09–0.38 | 0.070 | 0.085 | about 0.125 |
+
+- **Measured:** every controller plans worse than the zero plan, and on DROID worse than the move of another clip.
+- **Measured:** 64 clips are too few, the zero plan changes from 0.132 to 0.094 on all clips. Planning must be compared on the same clips, not against a fixed value.
+- **Inferred:** the CEM pushes toward large actions that lower the imagined cost. This is not tested yet.
+- **Next:** the CEM is removed from this branch (last version in `248588a`) and will be rebuilt one step at a time, starting by testing whether the cost ranks the true actions first.
