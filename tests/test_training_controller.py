@@ -106,3 +106,24 @@ def test_train_controller_end_to_end(tiny_runs):
     assert (tmp / "cache" / "wm-tiny" / "sim-train.pt").exists()
     model, ctrl = load_controller(run, torch.device("cpu"))
     assert not any(p.requires_grad for p in ctrl.parameters())
+
+
+def test_load_controller_takes_the_checkpoint_it_was_trained_on(tiny_runs):
+    """The world model's checkpoint comes from the controller's config: step-N.pt stays step-N.pt, not best.pt"""
+    from h2r.models.controller import build_controller, load_controller
+    from h2r.models.jepa import load_world_model
+
+    tmp, wm = tiny_runs
+    device = torch.device("cpu")
+    model, wm_cfg = load_world_model(wm, device)
+    step = {k: v + 1 if v.is_floating_point() else v for k, v in model.state_dict().items()}
+    torch.save({"model": step}, wm / "step-2.pt")
+
+    run = tmp / "ctrl"
+    run.mkdir()
+    ctrl_model = {"mlp_dim": 32}
+    yaml.safe_dump({"world_model": str(wm), "checkpoint": "step-2.pt", "model": ctrl_model}, open(run / "config.yaml", "w"))
+    torch.save({"model": build_controller(ctrl_model, wm_cfg).state_dict()}, run / "best.pt")
+
+    loaded, _ = load_controller(run, device)
+    assert all(torch.equal(v, step[k]) for k, v in loaded.state_dict().items())

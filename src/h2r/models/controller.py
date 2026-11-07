@@ -73,7 +73,7 @@ def load_controller(run_dir, device):
     """Frozen controller of a training run (config.yaml + best.pt) and the frozen world model it was trained for"""
     run_dir = Path(run_dir)
     cfg = yaml.safe_load(open(run_dir / "config.yaml"))
-    model, wm_cfg = load_world_model(cfg["world_model"], device)
+    model, wm_cfg = load_world_model(cfg["world_model"], device, cfg.get("checkpoint", "best.pt"))  # runs before the key: best.pt
     ctrl = build_controller(cfg["model"], wm_cfg).to(device)
     ctrl.load_state_dict(torch.load(run_dir / "best.pt", map_location=device)["model"])
     return model, ctrl.eval().requires_grad_(False)
