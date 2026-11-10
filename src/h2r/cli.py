@@ -35,6 +35,13 @@ GROUPS = {
             "real action + state -> latent action, for a trained world model",
         ),
     },
+    "plan": {
+        "run": (
+            "h2r.plan:run",
+            "configs/planning/robosuite.yaml",
+            "closed-loop episodes in robosuite: random, scripted, recorded, zero or CEM policy",
+        ),
+    },
 }
 
 
@@ -81,3 +88,7 @@ def main():
     module, fn = args.target.split(":")
     cfg = override(load(args.config), args.set) | {"config_path": args.config}
     getattr(importlib.import_module(module), fn)(cfg)
+
+
+if __name__ == "__main__":
+    main()

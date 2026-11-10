@@ -4,6 +4,7 @@ import hashlib
 import os
 import shutil
 import subprocess
+import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -78,6 +79,23 @@ def extract_frames(path, fps, size, crop=True):
     out = run.stdout
     frames = out.split(JPEG_END)[:-1]  # 0xFFD9 only appears as end of image
     return [f + JPEG_END for f in frames]
+
+
+def write_video(frames, path, fps, crf):
+    """RGB frames (H, W, 3) uint8 -> H.264 mp4 (yuv420p), one video frame per given frame"""
+    h, w = frames[0].shape[:2]
+    cmd = ["ffmpeg", "-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{w}x{h}", "-r", str(fps),
+           "-i", "-", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", str(crf), str(path)]
+    subprocess.run(cmd, input=np.stack(frames).tobytes(), check=True)
+
+
+def data_frame(frame, fps, crf, size):
+    """One rendered frame through the chain of the data: H.264 video (crf), then extract_frames -> JPEG bytes.
+    A raw render is about as far from the data as another episode's start (experimentation.ipynb, 9 Nov.)"""
+    with tempfile.TemporaryDirectory() as tmp:
+        video = Path(tmp) / "frame.mp4"
+        write_video([frame], video, fps, crf)
+        return extract_frames(video, fps, size)[0]
 
 
 def extract(cfg):

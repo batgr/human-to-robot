@@ -1,5 +1,12 @@
+# robosuite environment, as the collection of batgre/h2r-sim-v3 (data/h2r-sim/config.yaml): the frames given to the
+# world model must look like the data
 env_name: Lift
 robots: Panda
-has_renderer: true
-renderer: mujoco
-camera_names: robot0_eye_in_hand
+camera_names: agentview           # the camera of the data
+camera_heights: 224
+camera_widths: 224
+control_freq: 20                  # 20 Hz; one action of the data is held frameskip control steps
+has_renderer: false               # true: MuJoCo window (on macOS, run with mjpython: see the README)
+has_offscreen_renderer: true      # the frames of the world model and of the videos
+use_camera_obs: false             # frames rendered once per action, not at every control step
+horizon: 100000                   # robosuite never ends the episode itself

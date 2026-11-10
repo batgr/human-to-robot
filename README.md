@@ -17,11 +17,117 @@ uv run h2r data push --config configs/data/droid.yaml
 # controller for a trained world model; ablations: --set 'model.inputs=[state]' or 'model.inputs=[action]'
 uv run h2r train controller --set world_model=outputs/<wm-run>
 
-# robosuite viewer (configs/env/config.yaml)
-uv run python src/h2r/envs/robosuite_env.py
+# closed loop in robosuite (configs/planning/robosuite.yaml, environment configs/env/config.yaml, CEM
+# configs/planning/cem.yaml): policy random | scripted | recorded | zero | cem, CEM goal final | stages | dense
+# (frame t + k); stage rates, summary.json and one video per episode in outputs/planning/
+uv run h2r plan run --set policy.goal=dense policy.k=1 policy.horizon=1 policy.context=2
+uv run h2r plan run --set policy=configs/planning/<another cem>.yaml   # another CEM file
+uv run h2r plan run --set policy.type=recorded                          # a baseline
+# same, watched in the MuJoCo window (macOS needs mjpython)
+uv run mjpython -m h2r.cli plan run --set env.has_renderer=true episodes.count=1
 
 # tests
 uv run pytest
+```
+
+## Current model
+
+The reference world model is the 20 h run of experiment 12: `wm-cls-ssv2-20hall-k2from1050-b3e-4-20k`, checkpoint `step-20000.pt`, trained at commit `248588a`.
+
+| Part | Specification | Parameters |
+|---|---|---:|
+| Encoder | ViT-tiny from scratch: 224 px, patch 14, 192-d, 12 layers, 3 heads | 5.50 M |
+| Projector | MLP on the CLS token: 192 → 2048 → 192, BatchNorm, GELU | 0.79 M |
+| IDM | Pairs (s_t, s_t+1), 2 transformer layers, 4 heads, read by one query; Gaussian z, 64-d | 1.36 M |
+| Predictor | 6 layers, causal, 16 heads of 64, MLP 2048, AdaLN-zero on z, RoPE on time; predicts the next state directly | 10.80 M |
+| Prediction projector | MLP: 192 → 2048 → 192, BatchNorm, GELU | 0.79 M |
+| **Total** | | **19.25 M** |
+
+| Training | Value |
+|---|---|
+| Data | SSv2 20 h: 19,301 videos, 20.9 h, 168 classes, 4 fps, no action labels |
+| Clips | 8 consecutive frames (2 s), 7 transitions |
+| Loss | teacher forcing + 2-step rollout from step 1,050 (last-gradient only, 3 states of context) + β KL + λ SIGReg |
+| Weights | β 3e-4, λ 0.09 |
+| Stop-gradient on the target | None |
+| Optimizer | AdamW, lr 1e-4, weight decay 1e-3, 10% warmup, gradient clip 1.0, bf16 |
+| Length | 20,000 steps, batch 128, seed 0 |
+
+Measured on validation at step 20,000:
+
+| Metric | Value |
+|---|---|
+| Error / persistence | 0.0135 |
+| 7-step gain over persistence | 0.987 |
+| Controllability | 0.99 |
+| Leak | 0.015 |
+| Invented motion | 1.09 |
+| Rank of the states (RankMe) | 72 / 192 |
+| Active dimensions of z | 8 / 64 |
+| Action class from z | 0.015 (chance 0.006) |
+| Left / right from z | 0.50 (chance 0.50) |
+| Hand R² from the encoder | 0.08 |
+
+These numbers do not show that the model is usable for control: see experiments 14 to 16.
+
+### Planning metrics of the current model
+
+Kept up to date: every new world model gets the same measures, on the same windows, so its progress on the task can be followed. Robosuite Lift, simulation validation episodes (210), controller `ctrl-sim`, context of 2 states, 3 actions planned. Intervals are 95 % bootstrap over episodes.
+
+| Metric | Value | Reference |
+|---|---|---|
+| Success rate: reach / grasp / lift (closed loop) | best lift 1 / 20, see the closed-loop table below | recorded actions 16 / 20 |
+| Offline verdict, run once: Δxyz L1 error of the CEM plan, Sim test (ctrl-sim) / DROID test (ctrl-droid) | 0.126 [0.121, 0.131] / 0.403 [0.391, 0.415]: fails (rule: beat the zero plan overall and on the most moving third) | zero plan 0.092 / 0.087, another episode 0.136 / 0.135 |
+| Hit rate Top-1 / Top-5 of the true actions among 64, goal 3 steps ahead | 10.4 % [8.9, 12.0] / 31.9 % [29.2, 34.6] | chance 1.6 % / 7.8 % |
+| Same, goal 7 steps ahead (true actions are no longer the best plan) | 4.5 % [3.2, 5.8] / 20.1 % [17.7, 22.6] | chance 1.6 % / 7.8 % |
+| Δxyz L1 error of the CEM plan (offline FDE), real goal 7 steps ahead | 0.122 [0.114, 0.129] | zero plan 0.087 [0.081, 0.093], another episode's move 0.130 [0.125, 0.135] |
+| Same Δxyz L1 error by policy: scripted / random episodes | 0.086 / 0.169 | zero plan 0.061 / 0.121; CEM minus zero plan on the most moving scripted third −0.001 [−0.013, +0.010] |
+| Direction of the CEM plan (cosine Δxyz), real goal 7 steps ahead | 0.16 [0.13, 0.20], amplitude 1.33 × the true move | random plan 0.00 |
+| True actions cost less than another episode's, goal 3 steps ahead | 0.745 [0.734, 0.757] | chance 0.5, pass rule 0.75 |
+| True actions bring the state closer than a zero plan, goal 7 steps ahead | 0.633 [0.605, 0.662] | chance 0.5 |
+| Direction of the planned move (cosine Δxyz), goal imagined from the true actions | 0.42 [0.28, 0.56] | random plan 0.00 |
+| Same goal imagined 7 steps ahead (no model error on the goal): Δxyz L1 error / cosine to the 3 / 7 true steps | 0.114 [0.107, 0.120] / 0.17 / 0.30 | real goal 0.122 / 0.16 / 0.30; zero plan 0.087; 3 true steps 0.62 to the 7-step move |
+| Same goal imagined 7 steps ahead, all 7 actions planned (diagnostic): cosine to the true 7-step move / final elite cost | 0.31 [0.27, 0.34] / 0.00047 | 3 actions planned 0.30; true actions cost 0 |
+| Δxyz L1 error of the CEM plan, 1 action, goal 1 step ahead | 0.044 [0.041, 0.046]; most moving third: gain on the zero plan +0.0045 [+0.0020, +0.0070] | zero plan 0.038 [0.035, 0.041], another episode 0.061 |
+| Gripper closure readable from the state (linear probe R²) | 0.04 | position x 0.81, z 0.58; time alone 0.05 |
+
+#### Closed loop (MPC in robosuite)
+
+20 scripted simulation validation episodes whose recording lifts the cube, same seed (same cube) as the recording. At each step the rendered frame goes through the data chain (H.264, then JPEG) and the encoder. The CEM (300 plans, 30 elites, 10 iterations, start at the controller's action mean and std) plans H actions toward the goal. The first action is executed by a calibrated delta command (command = Δxyz / K, held 5 control steps; rotation 0; gripper closes or opens past a Δclosure of ±0.05). Then it replans: 40 steps, context of 2 states linked by the controller's z of the achieved action.
+
+Stages, each counted if met at any step:
+- **reach**: gripper centre within 3 cm of the cube centre;
+- **grasp**: both finger pads touch the cube (robosuite `_check_grasp`);
+- **lift**: cube centre more than 4 cm above the table (robosuite Lift success test).
+
+Goals:
+- **final goal**: the last frame of the recording (cube held up), at every step;
+- **stage subgoals** (as V-JEPA 2-AC's subgoal images): the recorded frame where reach is first met, then the one where grasp is first met, then the final frame. Each one is the goal until the recording reaches that stage (stage times from an exact replay of the recorded commands);
+- **dense subgoals t+k**: the recorded frame k steps after the current step.
+
+| Planner | Reach | Grasp | Lift | Steps to reach / grasp / lift | Final error: gripper / cube | Hit rate Top-1 / Top-5 (offline) | Δxyz FDE (offline) | Time per step |
+|---|---|---|---|---|---|---|---|---|
+| Recorded actions, same executor (reference) | 18 [70–97 %] | 19 [76–99 %] | 16 [58–92 %] | 10 / 17 / 18 | 1.7 / 1.7 cm | | | 0.43 s |
+| Final goal, H = 1 | 0 [0–16 %] | 0 [0–16 %] | 0 [0–16 %] | – / – / – | 6.7 / 11.9 cm | not measured | not measured | 0.56 s |
+| Final goal, H = 2 | 1 [1–24 %] | 1 [1–24 %] | 0 [0–16 %] | 22 / 10 / – | 14.9 / 11.9 cm | not measured | not measured | 0.70 s |
+| Final goal, H = 3 | 0 [0–16 %] | 0 [0–16 %] | 0 [0–16 %] | – / – / – | 19.9 / 11.9 cm | not measured | not measured | 0.87 s |
+| Stage subgoals, H = 1 | 3 [5–36 %] | 1 [1–24 %] | 0 [0–16 %] | 20 / 11 / – | 14.8 / 12.1 cm | not measured | not measured | 0.64 s |
+| Stage subgoals, H = 2 | 5 [11–47 %] | 3 [5–36 %] | 1* [1–24 %] | 14 / 8 / 24 | 18.5 / 12.1 cm | not measured | not measured | 0.76 s |
+| Dense subgoals t+1, H = 1 | 4 [8–42 %] | 3 [5–36 %] | 1 [1–24 %] | 17 / 13 / 23 | 6.9 / 11.9 cm | not measured | 0.044 (zero plan 0.038) | 0.47 s |
+| Dense subgoals t+7, H = 3 | 7 [18–57 %] | 3 [5–36 %] | 0 [0–16 %] | 13 / 16 / – | 19.5 / 12.0 cm | 4.5 % / 20.1 % (chance 1.6 / 7.8) | 0.122 (zero plan 0.087) | 0.86 s |
+| Zero plan (reference) | 0 [0–16 %] | 0 [0–16 %] | 0 [0–16 %] | – / – / – | 12.4 / 11.9 cm | | | 0.43 s |
+
+Counts out of 20, 95 % Wilson intervals. Steps to a stage: median over the episodes that reach it. Final error: distance at step 40 to the recording's final gripper position and final cube position. Offline columns: same horizon and goal distance on Sim val windows. Time per step: wall clock on a MacBook (MPS), rendering and simulation included (0.43 s without planning).
+
+- **Measured:** no planner lifts the cube in a stable way. The one lift with dense subgoals t+1 (episode 20) raises the cube 9 cm, grasped at step 23, and drops it 2 steps later. *The stage-subgoal lift (episode 134) is the cube at 4.1 cm for one step, without a grasp at that step: pushed, not lifted (inferred).
+- **Measured:** grasps last 1 or 2 steps (recorded actions: 22). The gripper is commanded closed / open 6 to 8 times per episode (recording: once).
+- **Measured:** with the final goal alone the arm moves about 8 cm in 5 steps, then stays 13–14 cm from the cube, for every H. With subgoals it comes to about 7 cm near step 15, then moves away when the goal becomes the lifted cube. Every planner ends 13–16 cm from the cube.
+- **Measured:** the recorded actions through the executor lift 16 / 20 (recording 20 / 20 on these episodes): without replanning, a drift of 1–2 cm at closing time flips marginal grasps (on 119 episodes: 10 lost, 9 gained).
+- **Inferred:** the subgoals help the approach (reach 3–7 / 20 against 0–1 with the final goal), not the grasp: the state does not hold the gripper closure (probe R² 0.04), so the CEM plans it at random.
+
+```bash
+uv run h2r train wm --set name=wm-cls-ssv2-20hall-k2from1050-b3e-4-20k data.processed_dir=<dir> \
+    loss.rollout_steps=2 loss.rollout_from=1050 loss.beta=0.0003 iterations=20000
 ```
 
 ## Experiments

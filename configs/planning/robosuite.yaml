@@ -1,0 +1,41 @@
+# h2r plan run: closed-loop episodes in robosuite, one per recorded episode (same seed, so the same cube), measured by
+# stage: reach, grasp, lift. Any key can be changed with --set, e.g. --set policy.type=scripted, policy.horizon=2, or a
+# whole file: policy=configs/planning/<cem file>.yaml, env=configs/env/<file>.yaml
+name: null                        # run folder in output_dir; null: built from the policy, e.g. cem-dense1-h1-c2
+output_dir: outputs/planning
+env: configs/env/config.yaml      # robosuite, as the collection
+steps: 40                         # actions per episode, as the recordings
+frameskip: 5                      # control steps per action: 20 Hz / 5 = 4 actions per second
+
+episodes:                         # recorded episodes: their seed, their goal frames, their final state for the errors
+  root: data/h2r-sim              # frame shards (h2r data extract)
+  hf_repo: batgre/h2r-sim-v3      # raw/<robot>/<task>/<recorded_by>/episode_<seed>/ sim.parquet, state.parquet (downloaded once)
+  split: val                      # the tuning set; test only for a verdict
+  recorded_by: scripted           # the collection policy whose recordings are the start scenes (seed, goal frames,
+                                  #   final state): raw/<robot>/<task>/<recorded_by>/; what commands the robot is policy
+  lifted_only: true               # only the recordings that lift the cube
+  count: 20                       # the first ones in shard order
+
+policy: configs/planning/cem.yaml # the policy and its settings; a baseline: --set policy.type=recorded
+
+executor:                         # action of the data -> OSC delta command, held frameskip control steps
+  K: [0.0579, 0.0558, 0.0617]     # achieved move (m) per unit of command, x y z, fitted on 60 Sim train scripted episodes
+  gripper_threshold: 0.05         # closes (opens) when the closure must rise (fall) by more than this, else keeps
+  video_crf: 12                   # the data chain of each frame given to the world model: H.264, then JPEG
+  image_size: 224
+
+measures:
+  reach: 0.03                     # gripper centre within 3 cm of the cube centre
+  lift: 0.04                      # cube centre this far above the table (robosuite's Lift success)
+
+task:                             # the collection's scripted and random policies (configs/data/sim.yaml of 1ac8d37^)
+  object: cube_pos
+  low: [-0.15, -0.15, 0.83]
+  high: [0.10, 0.15, 0.95]
+  noise: 0.1
+  gain: 2.0
+  max_hold: 12
+
+render:
+  video: true                     # one mp4 per episode in the run folder (agentview, 4 fps)
+  video_crf: 18

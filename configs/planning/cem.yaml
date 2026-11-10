@@ -1,0 +1,16 @@
+# CEM policy of h2r plan run (configs/planning/robosuite.yaml: policy). Another CEM = another file of this form,
+# given with --set policy=configs/planning/<file>.yaml, or a key changed with --set policy.horizon=3
+type: cem                         # random | scripted (the collection's policies) | recorded (the recorded actions of the
+                                  # data, without replanning) | zero (action 0 at every step) | cem; the other types
+                                  # ignore the keys below
+controller: outputs/ctrl-20h/ctrl-sim-20261106-012650  # its config.yaml gives the world model and its checkpoint
+context: 2                        # states given to the predictor, linked by the controller's z of the achieved actions
+horizon: 1                        # actions planned at each step; the first one is executed, then the CEM replans
+goal: dense                       # final: last recorded frame at every step
+                                  # stages: recorded frame where reach is first met, then grasp, then the last frame,
+                                  #   each one until the recording reaches that stage
+                                  # dense: recorded frame t + k
+k: 1                              # dense only
+samples: 300                      # plans drawn per iteration
+elites: 30                        # cheapest plans kept
+iterations: 10                    # refits of the Gaussian, which starts at the controller's action mean and std
