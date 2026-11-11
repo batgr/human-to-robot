@@ -58,7 +58,8 @@ class ClipDataset(Dataset):
             pq.read_table(p, columns=["frames"], memory_map=True)
             for p in shards(root, split)
         )
-        self.frames = table.column("frames").combine_chunks()
+        # large_binary: 64-bit offsets, a split may hold more than 2 GB of JPEG (16.5 GB for the 200 h train)
+        self.frames = table.column("frames").cast(pa.list_(pa.large_binary())).combine_chunks()
         self.clip_len = clip_len
         lengths = self.frames.value_lengths().to_numpy()
 
