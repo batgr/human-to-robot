@@ -155,3 +155,17 @@ def test_residual_predictor_starts_as_persistence():
     emb = model.encode(torch.randint(0, 255, (2, 3, 3, 28, 28)))
     z, _ = model.idm(emb)
     assert torch.equal(model.predict(emb[:, :-1], z), emb[:, :-1])
+
+
+def test_bit_encoder_tokens_like_a_vit():
+    """BiT ResNet-v2: pooled token first, then the feature map; CLS (n = 1) or one state per cell (n = grid)"""
+    from h2r.models.jepa import build_model
+
+    enc = {"type": "bit", "image_size": 64, "dim": 1024, "depths": [1, 1, 1, 1]}  # 2 x 2 cells; GroupNorm(32) needs dim >= 1024
+    model = build_model(tiny_cfg(encoder=enc)).eval()
+    tokens = model.encoder(torch.randint(0, 255, (3, 3, 64, 64)).float()).last_hidden_state
+    assert tokens.shape == (3, 1 + 4, 1024)
+    assert torch.allclose(tokens[:, 0], tokens[:, 1:].mean(1), atol=1e-6)
+    assert model.encode(torch.randint(0, 255, (2, 3, 3, 64, 64))).shape == (2, 3, 8)
+    model = build_model(tiny_cfg(encoder=enc, num_patches=4)).eval()
+    assert model.encode(torch.randint(0, 255, (2, 3, 3, 64, 64))).shape == (2, 3, 4, 8)

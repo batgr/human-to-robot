@@ -9,7 +9,7 @@ import yaml
 from einops import rearrange
 from torch import nn
 
-from h2r.models.encoder import FrozenEncoder, ViTEncoder
+from h2r.models.encoder import BitEncoder, FrozenEncoder, ViTEncoder
 from h2r.models.idm import IDM
 from h2r.models.module import MLP, ARPredictor, PatchProjector
 
@@ -95,14 +95,14 @@ class JEPA(nn.Module):
         return emb[:, -h:].unflatten(0, (b, s))
 
 
-ENCODERS = {"frozen": FrozenEncoder, "vit": ViTEncoder}
+ENCODERS = {"frozen": FrozenEncoder, "vit": ViTEncoder, "bit": BitEncoder}
 
 
 def build_model(cfg):
     enc = dict(cfg["encoder"])
     encoder = ENCODERS[enc.pop("type")](**enc)
     n = cfg.get("num_patches", 1)
-    grid = (enc["image_size"] // encoder.model.config.patch_size) ** 2  # encoder patch tokens: 256 at 224 px
+    grid = (enc["image_size"] // encoder.patch_size) ** 2  # encoder tokens: 256 at 224 px (ViT, patch 14), 49 (BiT, stride 32)
     projector = (
         MLP(input_dim=enc["dim"], **cfg["projector"])  # on the CLS token (n = 1) or on every patch token (n = grid)
         if n in (1, grid)

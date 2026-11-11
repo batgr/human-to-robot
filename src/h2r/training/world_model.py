@@ -251,13 +251,17 @@ def train_fit(model, batches, device, autocast):
 
 
 def layer_of(name):
-    """Encoder or projector parameter -> its layer: embeddings, block_1..block_L, final_norm, projector"""
+    """Encoder or projector parameter -> its layer: embeddings, block_1..block_L (stage_1..stage_4 for BiT),
+    final_norm, projector"""
     if name.startswith("projector"):
         return "projector"
+    stage = re.search(r"\.stages\.(\d+)\.", name)  # BiT: model.encoder.stages.i.layers.j
+    if stage:
+        return f"stage_{int(stage.group(1)) + 1}"
     block = re.search(r"\.layers?\.(\d+)\.", name)  # transformers 5: model.layers.i, 4: model.encoder.layer.i
     if block:
         return f"block_{int(block.group(1)) + 1}"
-    return "embeddings" if "embeddings" in name else "final_norm"
+    return "embeddings" if "embedd" in name else "final_norm"  # ViT embeddings, BiT embedder
 
 
 def gradient_shares(model, sigreg, clip, cfg, autocast):
