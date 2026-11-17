@@ -2,6 +2,7 @@
 
 import hashlib
 import os
+import random
 import shutil
 import subprocess
 import tempfile
@@ -106,6 +107,8 @@ def extract(cfg):
         if p.suffix.lower() in VIDEO_EXTS
         and not p.name.startswith(".")  # skip macOS ._ files
     )
+    # shuffled: each shard is a random sample of the videos (fetch takes whole shards); the splits do not move
+    random.Random(cfg["split"]["seed"]).shuffle(videos)
     print(f"{len(videos)} videos in {raw}")
 
     (out / "frames").mkdir(parents=True, exist_ok=True)
@@ -178,12 +181,17 @@ def extract(cfg):
 
 
 def push(cfg):
+    """processed_dir -> hf_repo, or into its folder <subset>/ when subset is set: one Hub dataset of several
+    subsets, read in part with h2r.data.dataset.fetch"""
     api = HfApi()
     api.create_repo(
         cfg["hf_repo"], repo_type="dataset", private=cfg["private"], exist_ok=True
     )
     api.upload_folder(
-        repo_id=cfg["hf_repo"], folder_path=cfg["processed_dir"], repo_type="dataset"
+        repo_id=cfg["hf_repo"], folder_path=cfg["processed_dir"], repo_type="dataset",
+        path_in_repo=cfg.get("subset"),
+        ignore_patterns=["._*", "**/._*", "**/*.arrow"],  # macOS ._ files, ClipDataset's local .arrow copies
     )
     visibility = "private" if cfg["private"] else "public"
-    print(f"pushed {cfg['processed_dir']} to {cfg['hf_repo']} ({visibility})")
+    where = f"{cfg['hf_repo']}/{cfg['subset']}" if cfg.get("subset") else cfg["hf_repo"]
+    print(f"pushed {cfg['processed_dir']} to {where} ({visibility})")

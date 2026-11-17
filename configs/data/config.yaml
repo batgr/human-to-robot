@@ -5,6 +5,7 @@ fps: 4
 image_size: 224
 min_frames: 2
 clip_len: 8   # frames per training clip, 2 s at 4 fps = W + 1: W = 7 is the teacher-forcing context (Terver et al. 2025: best 5 on DROID at 4 fps)
+stride: 1     # frames between the starts of two training clips of a video (1: every start, all runs so far; validation always 1)
 actions: false
 split_by: video
 
@@ -15,4 +16,5 @@ split:
 
 shard_size: 1000
 hf_repo: batgre/h2r
+subset: null # a name: push into hf_repo/<subset>/, one Hub dataset of several subsets (h2r.data.dataset.fetch)
 private: false
