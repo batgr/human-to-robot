@@ -9,7 +9,8 @@ class ControlledRollout:
     controller from the true real actions (ctrl) and of the IDM (idm, a reference: it sees the next frame).
     - error_h{h}, error_idm_h{h}: MSE of the state h steps ahead;
     - error_ratio_h{h}: error with the controller / error with the IDM, the measure of Garrido et al. 2026 (tables S1-S2:
-      x1.0-1.5 on DROID and RECON, in LPIPS of decoded frames: not a threshold for this embedding MSE)."""
+      x1.0-1.5 on DROID and RECON, in LPIPS of decoded frames: not a threshold for this embedding MSE).
+    """
 
     def __init__(self):
         self.err = {"ctrl": [], "idm": []}
@@ -23,7 +24,9 @@ class ControlledRollout:
             "idm": model.rollout(start, past, mu[:, None])[:, 0],
         }
         for k, pred in preds.items():
-            self.err[k].append((pred.float() - target).pow(2).flatten(2).mean(-1).cpu())  # (B, H)
+            self.err[k].append(
+                (pred.float() - target).pow(2).flatten(2).mean(-1).cpu()
+            )  # (B, H)
 
     def compute(self):
         err = {k: torch.cat(v).double().mean(0) for k, v in self.err.items()}

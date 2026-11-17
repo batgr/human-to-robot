@@ -7,6 +7,11 @@ import yaml
 
 GROUPS = {
     "data": {
+        "collect": (
+            "h2r.data.sim:collect",
+            "configs/data/sim.yaml",
+            "robosuite episodes -> raw videos, states and simulator data",
+        ),
         "extract": (
             "h2r.data.prepare:extract",
             "configs/data/config.yaml",
@@ -40,6 +45,11 @@ GROUPS = {
             "h2r.plan:run",
             "configs/planning/robosuite.yaml",
             "closed-loop episodes in robosuite: random, scripted, recorded, zero or CEM policy",
+        ),
+        "offline": (
+            "h2r.plan:offline",
+            "configs/planning/offline.yaml",
+            "CEM and its cost on windows of recorded episodes: gates, hit rate, known case, Δxyz verdict",
         ),
     },
 }

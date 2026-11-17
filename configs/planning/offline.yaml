@@ -1,0 +1,23 @@
+# h2r plan offline: the CEM and its cost on windows of recorded episodes, without the simulator (experimentation.ipynb,
+# 7-9 Nov.). The same battery for every world model, through its controller. E.g.
+#   h2r plan offline --set controller=outputs/ctrl-200h/ctrl-sim-20261112-112706
+name: null                        # run folder in output_dir; null: <controller folder>-<controller run>-<dataset>
+output_dir: outputs/planning-offline
+controller: outputs/ctrl-20h/ctrl-sim-20261106-012650  # its config.yaml gives the world model and its checkpoint
+root: data/h2r-sim                # frame shards of the episodes (states encoded once per world model in cache)
+cache: data/cache
+splits: [val, test]               # val: the tuning set; test: the verdict, read once
+
+context: 2                        # real states before the actions to find, linked by the controller's z
+horizon: 3                        # actions the CEM plans
+goal: 7                           # goal state, steps after the current state (gate_far, known case, verdict);
+                                  # gate_near: the goal right after the horizon
+candidates: 63                    # other episodes' actions ranked against the true ones: hit rate top-1 / top-5
+cem:                              # starts at the controller's action mean and std
+  samples: 300
+  elites: 30
+  iterations: 10
+
+rules:                            # fixed 7-8 Nov., before any result
+  near: 0.75                      # gate_near: true actions beat other episodes, lower bound >= this
+  far: 0.5                        # gate_far: true actions beat the zero plan, lower bound > this

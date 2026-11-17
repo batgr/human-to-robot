@@ -6,6 +6,12 @@ import robosuite as suite
 from scipy.spatial.transform import Rotation
 
 
+# Gap between the two finger joints (qpos[0] - qpos[1]) fully open and fully closed on nothing, for the closedness in
+# [0, 1]. Panda: the joint ranges (0.08, 0), as batgre/h2r-sim-v3 was collected. Sawyer: measured on 10 Nov. 2026
+# (open command: 0.0113 / -0.0113, close: -0.0118 / 0.0118; its joint ranges are not the open and closed positions)
+FINGER_GAP = {"PandaGripper": (0.08, 0.0), "RethinkGripper": (0.0226, -0.0236)}
+
+
 class RobosuiteEnv:
     def __init__(self, cfg: dict):
         """has_renderer: the MuJoCo window (mjviewer, under mjpython on macOS). robosuite's offscreen renderer is then
@@ -48,6 +54,11 @@ class RobosuiteEnv:
     def table_height(self):
         return self.env.model.mujoco_arena.table_offset[2]
 
+    def sim_state(self):
+        """MuJoCo state, then the gripper's command integrator (robosuite keeps it outside the MuJoCo state)"""
+        gripper = next(iter(self.env.robots[0].gripper.values()))
+        return np.r_[self.env.sim.get_state().flatten(), gripper.current_action]
+
     def step(self, action):
         obs = self.env.step(action)[0]
         if self.cfg.get("has_renderer"):
@@ -67,14 +78,12 @@ class RobosuiteEnv:
             "xyz"
         )
 
-        joints = list(robot.gripper.values())[0].joints
-        ranges = [
-            self.env.sim.model.jnt_range[self.env.sim.model.joint_name2id(j)]
-            for j in joints
-        ]
+        gripper = type(next(iter(robot.gripper.values()))).__name__
+        if gripper not in FINGER_GAP:
+            raise NotImplementedError(f"no closedness reading for {gripper} (see FINGER_GAP)")
+        opened, closed = FINGER_GAP[gripper]
         q = obs["robot0_gripper_qpos"]
-        closed = 1 - (q[0] - q[1]) / (ranges[0][1] - ranges[1][0])
-        return np.r_[pos, rot, np.clip(closed, 0, 1)]
+        return np.r_[pos, rot, np.clip((opened - (q[0] - q[1])) / (opened - closed), 0, 1)]
 
 
 if __name__ == "__main__":

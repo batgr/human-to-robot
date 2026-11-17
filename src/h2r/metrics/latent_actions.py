@@ -45,7 +45,17 @@ class LatentActions:
         self.n, self.kl = 0, 0.0
         self.err = self.err_other = self.err_last = self.err_cut = self.err_cycle = 0.0
         self.sigma = 0.0
-        self.raw = {k: [] for k in ["leak", "leak_a_vs_c", "alpha_a", "alpha_c", "transfer_cos", "motion_a"]}
+        self.raw = {
+            k: []
+            for k in [
+                "leak",
+                "leak_a_vs_c",
+                "alpha_a",
+                "alpha_c",
+                "transfer_cos",
+                "motion_a",
+            ]
+        }
 
     def update(self, model, emb, z, pred, kl):
         """emb: (B, T, D) or (B, T, N, D), z: (B, T-1, z_dim) mu of the IDM, pred = predict(emb[:, :-1], z)"""
@@ -55,8 +65,14 @@ class LatentActions:
         self.err += mse(pred, target) * b
         pred_ab = model.predict(emb[:, :-1], other(z))  # A = the other clip, its z on B
         self.err_other += mse(pred_ab, target) * b
-        e, a, p = emb.float().flatten(2), other(emb).float().flatten(2), pred_ab.float().flatten(2)
-        c = other(other(emb)).float().flatten(2)  # an unrelated clip: its z was not used
+        e, a, p = (
+            emb.float().flatten(2),
+            other(emb).float().flatten(2),
+            pred_ab.float().flatten(2),
+        )
+        c = (
+            other(other(emb)).float().flatten(2)
+        )  # an unrelated clip: its z was not used
 
         def alpha(x):
             """position of the prediction on the way from B's next state to x"""
@@ -68,7 +84,9 @@ class LatentActions:
             "leak_a_vs_c": (p - a[:, 1:]).norm(dim=-1) < (p - c[:, 1:]).norm(dim=-1),
             "alpha_a": alpha(a[:, 1:]),
             "alpha_c": alpha(c[:, 1:]),
-            "transfer_cos": F.cosine_similarity(p - e[:, :-1], a[:, 1:] - a[:, :-1], dim=-1),
+            "transfer_cos": F.cosine_similarity(
+                p - e[:, :-1], a[:, 1:] - a[:, :-1], dim=-1
+            ),
             "motion_a": 1 - F.cosine_similarity(a[:, :-1], a[:, 1:], dim=-1),
         }
         for k, v in new.items():
@@ -98,7 +116,9 @@ class LatentActions:
         sigma = self.sigma.cpu().double() / self.mu.n
         return {
             "kl": float(self.kl / self.n),
-            "mu_spread_over_sigma": float((self.mu.var().clamp_min(0).sqrt() / sigma).mean()),
+            "mu_spread_over_sigma": float(
+                (self.mu.var().clamp_min(0).sqrt() / sigma).mean()
+            ),
             "leak": float(r["leak"].mean()),
             "leak_a_vs_c": float(r["leak_a_vs_c"].mean()),
             "leak_alpha": float(r["alpha_a"].mean() - r["alpha_c"].mean()),
