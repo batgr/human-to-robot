@@ -10,13 +10,7 @@ So far: the model predicts human video well, and it follows robot paths when its
 
 *Closed-loop planning with the 20 h model: at each step the CEM plans the next action toward the next frame of a demonstration, the action is executed, and the model replans from the new image. This is the best episode (validation episode 20): reach at step 13, grasp at 25, lift at 26; the cube drops at step 30. It is the only lift out of 20 episodes in this setting.*
 
-```text
-frame ──> ViT-tiny encoder ──> state s_t
-                                 │
-         (s_t, s_t+1) ──> IDM ──> latent action z_t      robot action a_t ──> controller ──> z_t
-                                 │
-         past states + z_t ──> predictor ──> next state s_t+1
-```
+![Architecture: training on human video (left) and planning on the robot (right)](docs/figures/architecture.svg)
 
 ### Results at a glance
 
@@ -39,9 +33,11 @@ Current model (20 h, details in [Current model](#current-model)). Every number i
 
 ![Validation error versus hours of video](docs/figures/experiments/data-scaling.png)
 
-**A 2-step rollout loss looks better for the wrong reason.** Every prediction metric improves, but the latent action starts carrying the next frame (leak 1 % → 66 %). Starting the term later or applying it to the predictor only brings the leak down to about 3 % ([exp. 5](#5-does-a-2-step-rollout-loss-help), [exp. 11](#11-how-much-does-the-leak-metric-hide)).
+**A 2-step rollout loss looks better for the wrong reason.** Every prediction metric improves, but the latent action starts carrying the next frame (leak 1 % → 66 %). Starting the term later or applying it to the predictor only brings `leak` down to 3 %, but this measure has a threshold and hides most of what remains: the share of the predicted move taken from the other clip falls only from 0.25 to 0.09 (0.04 without the term). In 20,000-step runs it peaks, then decays while the learning rate falls, and never returns to the level of a run without the term ([exp. 5](#5-does-a-2-step-rollout-loss-help), [exp. 11](#11-how-much-does-the-leak-metric-hide), [exp. 12](#12-long-training-on-20-h-of-all-classes)).
 
 ![Prediction gain and leak for each rollout loss variant](docs/figures/experiments/rollout-leak.png)
+
+![Leak over the two long runs](docs/figures/experiments/leak-over-training.png)
 
 **The encoder does not learn where the hand is.** A linear probe reads the hand position from frozen DINOv2 patches (R² 0.39–0.43) but hardly from our states (0.00–0.07, untrained 0.04) ([exp. 7](#7-do-the-states-know-where-the-hand-is)).
 
@@ -130,6 +126,8 @@ Each table has one row per world model, so models can be compared directly. 20 h
 | Dense subgoals t+7, H = 3 | 20 h | 7 | 3 | 0 |
 | | 200 h | 1 | 1 | 0 |
 
+Counts out of 20. 95 % Wilson intervals: 0 → 0–16 %, 1 → 1–24 %, 2 → 3–30 %, 3 → 5–36 %, 4 → 8–42 %, 5 → 11–47 %, 7 → 18–57 %, 16 → 58–92 %, 18 → 70–97 %, 19 → 76–99 %. With 20 episodes, almost no difference between two settings is significant.
+
 **Hit rate**: rank of the true actions among 64 action sequences (the true ones and 63 from other episodes), Sim val.
 
 | Model | Top-1, goal 3 steps | Top-5, goal 3 steps | Top-1, goal 7 steps | Top-5, goal 7 steps |
@@ -197,37 +195,38 @@ Goals:
 - **stage subgoals** (as V-JEPA 2-AC's subgoal images): the recorded frame where reach is first met, then the one where grasp is first met, then the final frame. Each one is the goal until the recording reaches that stage (stage times from an exact replay of the recorded commands);
 - **dense subgoals t+k**: the recorded frame k steps after the current step.
 
-| Planner | Reach | Grasp | Lift | Steps to reach / grasp / lift | Final error: gripper / cube | Hit rate Top-1 / Top-5 (offline) | Δxyz FDE (offline) | Time per step |
-|---|---|---|---|---|---|---|---|---|
-| Recorded actions, same executor (reference) | 18 [70–97 %] | 19 [76–99 %] | 16 [58–92 %] | 10 / 17 / 18 | 1.7 / 1.7 cm | | | 0.43 s |
-| Final goal, H = 1 | 0 [0–16 %] | 0 [0–16 %] | 0 [0–16 %] | – / – / – | 6.7 / 11.9 cm | not measured | not measured | 0.56 s |
-| Final goal, H = 2 | 1 [1–24 %] | 1 [1–24 %] | 0 [0–16 %] | 22 / 10 / – | 14.9 / 11.9 cm | not measured | not measured | 0.70 s |
-| Final goal, H = 3 | 0 [0–16 %] | 0 [0–16 %] | 0 [0–16 %] | – / – / – | 19.9 / 11.9 cm | not measured | not measured | 0.87 s |
-| Stage subgoals, H = 1 | 3 [5–36 %] | 1 [1–24 %] | 0 [0–16 %] | 20 / 11 / – | 14.8 / 12.1 cm | not measured | not measured | 0.64 s |
-| Stage subgoals, H = 2 | 5 [11–47 %] | 3 [5–36 %] | 1* [1–24 %] | 14 / 8 / 24 | 18.5 / 12.1 cm | not measured | not measured | 0.76 s |
-| Dense subgoals t+1, H = 1 | 4 [8–42 %] | 3 [5–36 %] | 1 [1–24 %] | 17 / 13 / 23 | 6.9 / 11.9 cm | not measured | 0.044 (zero plan 0.038) | 0.47 s |
-| Dense subgoals t+7, H = 3 | 7 [18–57 %] | 3 [5–36 %] | 0 [0–16 %] | 13 / 16 / – | 19.5 / 12.0 cm | 4.5 % / 20.1 % (chance 1.6 / 7.8) | 0.122 (zero plan 0.087) | 0.86 s |
-| Zero plan (reference) | 0 [0–16 %] | 0 [0–16 %] | 0 [0–16 %] | – / – / – | 12.4 / 11.9 cm | | | 0.43 s |
+Success counts are in the [Success rate](#planning-metrics) table above. The details of each run:
 
-Counts out of 20, 95 % Wilson intervals. Steps to a stage: median over the episodes that reach it. Final error: distance at step 40 to the recording's final gripper position and final cube position. Offline columns: same horizon and goal distance on Sim val windows. Time per step: wall clock on a MacBook (MPS), rendering and simulation included (0.43 s without planning).
+| Planner | Model | Steps to reach / grasp / lift | Final error: gripper / cube | Time per step |
+|---|---|---|---|---|
+| Recorded actions, same executor (reference) | | 10 / 17 / 18 | 1.7 / 1.7 cm | 0.43 s |
+| Zero plan (reference) | | – / – / – | 12.4 / 11.9 cm | 0.43 s |
+| Final goal, H = 1 | 20 h | – / – / – | 6.7 / 11.9 cm | 0.56 s |
+| | 200 h | – / 32 / – | 23.1 / 11.9 cm | 0.21 s |
+| Final goal, H = 2 | 20 h | 22 / 10 / – | 14.9 / 11.9 cm | 0.70 s |
+| | 200 h | 8 / – / – | 42.0 / 11.9 cm | 0.39 s |
+| Final goal, H = 3 | 20 h | – / – / – | 19.9 / 11.9 cm | 0.87 s |
+| | 200 h | – / – / – | 26.2 / 11.9 cm | 0.58 s |
+| Stage subgoals, H = 1 | 20 h | 20 / 11 / – | 14.8 / 12.1 cm | 0.64 s |
+| | 200 h | – / 12 / – | 23.9 / 12.1 cm | 0.21 s |
+| Stage subgoals, H = 2 | 20 h | 14 / 8 / 24 | 18.5 / 12.1 cm | 0.76 s |
+| | 200 h | 7 / 10 / 38 | 32.4 / 12.1 cm | 0.39 s |
+| Dense subgoals t+1, H = 1 | 20 h | 17 / 13 / 23 | 6.9 / 11.9 cm | 0.47 s |
+| | 200 h | 9 / 9.5 / – | 17.9 / 12.4 cm | 0.21 s |
+| Dense subgoals t+7, H = 3 | 20 h | 13 / 16 / – | 19.5 / 12.0 cm | 0.86 s |
+| | 200 h | 8 / 14 / – | 21.7 / 11.9 cm | 0.58 s |
 
-- **Measured:** no planner lifts the cube in a stable way. The one lift with dense subgoals t+1 (episode 20) grasps the cube at step 25, holds it 5 steps and lifts it at steps 26–28, up to 7 cm above its resting height; the cube is back on the table at step 30. *The stage-subgoal lift (episode 134) is the cube at 4.1 cm for one step, without a grasp at that step: pushed, not lifted (inferred).
+Steps to a stage: median over the episodes that reach it. Final error: distance at step 40 to the recording's final gripper position and final cube position. Time per step: wall clock on a MacBook (MPS), rendering and simulation included (0.43 s without planning). 200 h: its ctrl-sim `best.pt` at step 22,500, `outputs/planning-200h/` (12 Nov.).
+
+**20 h model**
+
+- **Measured:** no planner lifts the cube in a stable way. The one lift with dense subgoals t+1 (episode 20) grasps the cube at step 25, holds it 5 steps and lifts it at steps 26–28, up to 7 cm above its resting height; the cube is back on the table at step 30. The stage-subgoal lift (episode 134) is the cube at 4.1 cm for one step, without a grasp at that step: pushed, not lifted (inferred).
 - **Measured:** grasps last 1 or 2 steps (recorded actions: 22). The gripper is commanded closed / open 6 to 8 times per episode (recording: once).
 - **Measured:** with the final goal alone the arm moves about 8 cm in 5 steps, then stays 13–14 cm from the cube, for every H. With subgoals it comes to about 7 cm near step 15, then moves away when the goal becomes the lifted cube. Every planner ends 13–16 cm from the cube.
 - **Measured:** the recorded actions through the executor lift 16 / 20 (recording 20 / 20 on these episodes): without replanning, a drift of 1–2 cm at closing time flips marginal grasps (on 119 episodes: 10 lost, 9 gained).
 - **Inferred:** the subgoals help the approach (reach 3–7 / 20 against 0–1 with the final goal), not the grasp: the state does not hold the gripper closure (probe R² 0.04), so the CEM plans it at random.
 
-**200 h world model** (SSv2 200 h, `step-20000.pt`, its own ctrl-sim `best.pt` at step 22,500; same 20 episodes, executor and CEM; `outputs/planning-200h/`, 12 Nov.):
-
-| Planner | Reach | Grasp | Lift | Steps to reach / grasp / lift | Final error: gripper / cube | Time per step |
-|---|---|---|---|---|---|---|
-| Final goal, H = 1 | 0 [0–16 %] | 1 [1–24 %] | 0 [0–16 %] | – / 32 / – | 23.1 / 11.9 cm | 0.21 s |
-| Final goal, H = 2 | 1 [1–24 %] | 0 [0–16 %] | 0 [0–16 %] | 8 / – / – | 42.0 / 11.9 cm | 0.39 s |
-| Final goal, H = 3 | 0 [0–16 %] | 0 [0–16 %] | 0 [0–16 %] | – / – / – | 26.2 / 11.9 cm | 0.58 s |
-| Stage subgoals, H = 1 | 0 [0–16 %] | 1 [1–24 %] | 0 [0–16 %] | – / 12 / – | 23.9 / 12.1 cm | 0.21 s |
-| Stage subgoals, H = 2 | 3 [5–36 %] | 4 [8–42 %] | 1 [1–24 %] | 7 / 10 / 38 | 32.4 / 12.1 cm | 0.39 s |
-| Dense subgoals t+1, H = 1 | 7 [18–57 %] | 2 [3–30 %] | 0 [0–16 %] | 9 / 9.5 / – | 17.9 / 12.4 cm | 0.21 s |
-| Dense subgoals t+7, H = 3 | 1 [1–24 %] | 1 [1–24 %] | 0 [0–16 %] | 8 / 14 / – | 21.7 / 11.9 cm | 0.58 s |
+**200 h model**
 
 - **Measured:** the one lift (stage subgoals H = 2, episode 291) is held: grasped on 21 of the last 32 steps, cube about 4 cm above its rest height at step 38 while grasped. Other grasps last 1 to 4 steps; two of them (final goal H = 1, stage subgoals H = 1) come without reach, the fingers closing on an edge with the gripper centre 3.0–3.5 cm away.
 - **Measured:** the arm ends farther from the recorded final position than with the 20 h model in every setting (17.9–42.0 cm against 6.7–19.9 cm); the offline plans are also larger (amplitude 1.45 against 1.24 on Sim test).
@@ -245,7 +244,10 @@ The model is a JEPA world model (LeWM recipe): a ViT-tiny encoder trained from s
 Metrics used throughout, all on held-out validation videos:
 - **error / persistence**: next-state prediction error divided by the error of copying the current state. Below 1 means the model beats copying.
 - **controllability**: how much the prediction changes when z comes from another clip (0 means z is ignored).
-- **leak**: how much of the future a z carries when transplanted into another clip (copying the future instead of describing an action).
+- **leak**: z of clip A is applied to clip B. Three measures of how much of A's future it carries (copying the future instead of describing an action):
+  - `leak`: share of predictions that land closer to A's next state than to B's. It only fires past halfway from B to A, so it misses smaller leaks;
+  - prediction closer to A than to C (`leak_a_vs_c`), C an unrelated clip: 0.5 means nothing of A;
+  - α_A − α_C (`leak_alpha`): position of the prediction on the way from B to A (0 at B, 1 at A), minus the same toward C. The share of the move taken from A, without a threshold.
 - **invented motion**: on static clips, predicted change / true change (1 is ideal).
 
 Unless stated otherwise: batch 128, lr 1e-4, KL weight β 1e-4, SIGReg λ 0.09, one seed.
@@ -309,10 +311,10 @@ Nested SSv2 subsets, 3,000 steps each.
 
 ![Gain over persistence and leak for each rollout loss variant](docs/figures/experiments/rollout-leak.png)
 
-- **Measured:** with K = 2, every prediction metric improves (7-step gain over persistence, 1 - error / persistence: 0.68 → 0.96). The leak rises from 1 % to 66 %.
+- **Measured:** with K = 2, every prediction metric improves (7-step gain over persistence, 1 - error / persistence: 0.68 → 0.96). `leak` rises from 1 % to 66 %, α_A − α_C from 0.04 to 0.25.
 - **Inferred:** the predictor reads its own noisy prediction while z comes from an IDM that sees the true future. Putting the future into z is the cheapest way down the loss. These gains rely on that leak, which is unavailable at planning time.
-- **Measured:** two fixes bring the leak back to about 3 %: starting K = 2 at step 500 (E9), or applying the term to the predictor only (E10).
-- **How we use it:** leak is now a hard constraint before ranking any model on prediction metrics. Experiment 11 shows that this 3 % overstates the fix.
+- **Measured:** two fixes bring `leak` back to about 3 %: starting K = 2 at step 500 (E9), or applying the term to the predictor only (E10). The threshold-free α_A − α_C only falls to 0.09, still more than twice K = 1 (experiment 11).
+- **How we use it:** leak is now a hard constraint before ranking any model on prediction metrics, read on the threshold-free measures.
 
 ### 6. Long training, and the positive control on robot video
 
@@ -408,11 +410,18 @@ Audit of `leak` on the saved checkpoints of experiments 5 and 6: 1,024 validatio
 
 Measured at the end of the run:
 - error / persistence 0.0135, 7-step gain over persistence 0.987, controllability 0.99;
-- leak 0.015, but prediction closer to A than to C 0.572, so some content of A remains;
+- `leak` 0.015, prediction closer to A than to C 0.572, α_A − α_C 0.022: some content of A remains (the long K = 1 run of experiment 6: 0.007 / 0.503 / 0.003);
 - hand R² from the encoder 0.08;
 - action class from z 0.015 (chance 0.006).
 
-**Untested:** the gap with experiment 6 could come from K, β or the data. Only a K = 1 run on the same data and β can tell.
+The leak over the run, with the 200 h run (batch 256, learning rate and SIGReg scaled with it):
+
+![Leak over the 20 h and 200 h runs](docs/figures/experiments/leak-over-training.png)
+
+- **Measured:** the leak appears as soon as K = 2 starts (step 1,050), peaks around step 4,000 (20 h: α_A − α_C 0.076, prediction closer to A than to C 0.71), then decays to the end.
+- **Inferred:** a 1,000-step run measures the leak on the way up, which explains most of the gap between experiment 5 (`leak` 0.034) and this run (0.015); data and β differ too.
+- **Measured:** the 200 h run leaks less on the threshold-free measures (0.008 and 0.518 at the end) but more on `leak` (0.026 against 0.015). The thresholded measure ranks the two runs in the opposite order.
+- **Untested:** the decay follows the cosine learning rate schedule; it may come from the falling learning rate, from β 3e-4 or from the data. The gap with experiment 6 could come from K, β or the data. Only a K = 1 run on the same data and β can tell.
 
 ### 13. Do the states separate datasets or actions?
 
