@@ -15,3 +15,5 @@ wheels/
 
 .DS_Store
 .vscode/
+# Notebooks: local only
+notebooks/
