@@ -15,13 +15,13 @@ from h2r.models.controller import build_controller
 from h2r.models.jepa import load_world_model
 from h2r.training.utils import (
     build_optimizer,
-    init_wandb,
     log,
-    make_autocast,
-    make_run_dir,
-    pick_device,
+    open_run,
+    optimizer_step,
+    progress,
     save_checkpoint,
-    seed_everything,
+    setup,
+    trainable_state,
 )
 
 
@@ -56,7 +56,7 @@ def as_list(value):
 
 def encoded(model, cfg, root, split, device, autocast):
     """States and actions of a split, encoded once per world model run and dataset (lists of episodes)"""
-    run, checkpoint = Path(cfg["world_model"]).name, cfg["checkpoint"]
+    run, checkpoint = Path(cfg["world_model"]).name, cfg.get("checkpoint", "best.pt")  # runs before the key: best.pt
     folder = run if checkpoint == "best.pt" else f"{run}-{Path(checkpoint).stem}"
     path = Path(cfg["data"]["cache"]) / folder / f"{Path(root).name}-{split}.pt"
     if not path.exists():
@@ -115,9 +115,7 @@ def train(cfg):
         raise ValueError(
             "world_model: the run of the world model, e.g. --set world_model=outputs/wm-..."
         )
-    seed_everything(cfg["seed"])
-    device = pick_device()
-    autocast = make_autocast(cfg["precision"], device)
+    device, autocast = setup(cfg)
 
     roots = as_list(cfg["data"]["root"])
     test_roots = as_list(cfg["data"].get("test_root") or roots)
@@ -148,8 +146,7 @@ def train(cfg):
     ctrl.set_action_stats(a)
     opt, sched = build_optimizer(ctrl, cfg["optim"], cfg["iterations"])
 
-    run_dir = make_run_dir(cfg)
-    wandb_run = init_wandb(cfg, run_dir)
+    run_dir, wandb_run = open_run(cfg)
     print(
         f"run: {run_dir} | device: {device} | world model: {cfg['world_model']} | "
         f"controller params: {sum(p.numel() for p in ctrl.parameters())} | train transitions: {len(a)}"
@@ -161,19 +158,12 @@ def train(cfg):
         idx = torch.randint(len(a), (cfg["batch_size"],), generator=gen).to(device)
         with autocast:
             loss = controller_loss(ctrl, s[idx], a[idx], mu[idx])
-        opt.zero_grad(set_to_none=True)
-        loss.backward()
-        opt.step()
-        sched.step()
+        optimizer_step(loss, ctrl, opt, sched)
         total += loss.detach()
 
         if step % cfg["log_every"] == 0:
             n = cfg["log_every"]
-            metrics = {
-                "train/loss": total.item() / n,
-                "optim/lr": sched.get_last_lr()[0],
-                "system/step_s": (time.time() - t0) / n,
-            }
+            metrics = {"train/loss": total.item() / n} | progress(sched, n, time.time() - t0, cfg["batch_size"])
             log(run_dir, step, metrics, wandb_run)
             total, t0 = 0.0, time.time()
 
@@ -182,12 +172,7 @@ def train(cfg):
             log(run_dir, step, metrics, wandb_run)
             if metrics["val/loss"] < best:
                 best = metrics["val/loss"]
-                save_checkpoint(
-                    run_dir / "best.pt",
-                    model=ctrl.state_dict(),
-                    step=step,
-                    val_loss=best,
-                )
+                save_checkpoint(run_dir / "best.pt", model=trainable_state(ctrl), step=step, val_loss=best)
             t0 = time.time()
 
     # the test split, once, with the best controller (selected on val)

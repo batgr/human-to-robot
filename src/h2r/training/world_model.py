@@ -12,21 +12,19 @@ from h2r.metrics.prediction import PredictionQuality, PredictorInternals, Rollou
 from h2r.metrics.representation import RepresentationHealth
 from h2r.training.utils import (
     build_optimizer,
-    grad_norms,
-    init_wandb,
-    pick_device,
-    seed_everything,
-    make_autocast,
-    make_run_dir,
+    epoch_of,
     forever,
-    peak_memory_gb,
     log,
-    rng_state,
-    set_rng_state,
+    open_run,
+    optimizer_step,
+    progress,
+    resume,
     save_checkpoint,
+    save_last,
+    setup,
+    trainable_state,
     update_ratios,
 )
-import json
 import time
 from pathlib import Path
 import yaml
@@ -37,7 +35,7 @@ from h2r.models.module import SIGReg
 def build_loaders(cfg, device):
     clip_len = cfg["data"]["clip_len"]
     root = cfg["data"]["processed_dir"]
-    ds_train = ClipDataset(root, "train", clip_len)
+    ds_train = ClipDataset(root, "train", clip_len, cfg["data"].get("stride", 1))  # val: every start, comparable runs
     args = dict(
         batch_size=cfg["batch_size"],
         num_workers=cfg["num_workers"],
@@ -45,9 +43,6 @@ def build_loaders(cfg, device):
         persistent_workers=cfg["num_workers"] > 0,
     )
     train = DataLoader(ds_train, shuffle=True, drop_last=True, **args)
-    if cfg["overfit_batches"]:  # the same first batches for training and validation
-        batches = list(itertools.islice(train, cfg["overfit_batches"]))
-        return batches, batches
     val = None
     if shards(root, "val"):
         ds_val = ClipDataset(root, "val", clip_len)
@@ -58,10 +53,13 @@ def build_loaders(cfg, device):
     return train, val
 
 
-def trainable_state(model):
-    """State dict without the frozen weights (a frozen encoder reloads from the Hub), buffers kept"""
-    frozen = {n for n, p in model.named_parameters() if not p.requires_grad}
-    return {k: v for k, v in model.state_dict().items() if k not in frozen}
+def rollout_start(loss, epoch_steps):
+    """First step of the k-step loss, teacher forcing only before: the first step of epoch loss.rollout_from_epoch,
+    or loss.rollout_from, a step, for runs saved before that key"""
+    epoch = loss.get("rollout_from_epoch")
+    if epoch is not None and "rollout_from" in loss:
+        raise ValueError("loss.rollout_from (a step, runs before rollout_from_epoch) and loss.rollout_from_epoch: give one")
+    return epoch * epoch_steps + 1 if epoch is not None else loss.get("rollout_from", 0)
 
 
 def train(cfg):
@@ -69,11 +67,8 @@ def train(cfg):
         run_dir = Path(cfg["resume"])
         cfg = yaml.safe_load(open(run_dir / "config.yaml"))  # the run's own config
         cfg["resume"] = str(run_dir)
-    seed_everything(cfg["seed"])
-    device = pick_device()
-
+    device, autocast = setup(cfg)
     torch.set_float32_matmul_precision("high")
-    autocast = make_autocast(cfg["precision"], device)
 
     train_loader, val_loader = build_loaders(cfg, device)
     train_iter = forever(train_loader)
@@ -85,40 +80,26 @@ def train(cfg):
 
     model = build_model(cfg["model"]).to(device)
     sigreg = SIGReg().to(device)
-    params = [p for p in model.parameters() if p.requires_grad]
     opt, sched = build_optimizer(model, cfg["optim"], cfg["iterations"])
 
     best_metric = cfg.get("best_metric", "loss/total_val")  # runs saved before the key: the validation loss
     start, best = 1, float("inf")  # lowest best_metric so far
     if cfg["resume"]:
-        ckpt = torch.load(run_dir / "last.pt", map_location=device, weights_only=False)
-        model.load_state_dict(ckpt["model"], strict=False)
-        opt.load_state_dict(ckpt["opt"])
-        sched.load_state_dict(ckpt["sched"])
-        set_rng_state(ckpt["rng"])
-        start, best = ckpt["step"] + 1, ckpt["best"]
-        metrics_file = (
-            run_dir / "metrics.jsonl"
-        )  # drop what was logged after the checkpoint
-        lines = metrics_file.read_text().splitlines(keepends=True)
-        metrics_file.write_text(
-            "".join(line for line in lines if json.loads(line)["step"] < start)
-        )
-    else:
-        run_dir = make_run_dir(cfg)
-
-    print(
-        f"run: {run_dir} | device: {device} | trainable params: {sum(p.numel() for p in params)}"
-    )
-
-    wandb_run = init_wandb(cfg, run_dir)
+        start, best = resume(run_dir, model, opt, sched, device)
+    run_dir, wandb_run = open_run(cfg, cfg["resume"])
+    n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(f"run: {run_dir} | device: {device} | trainable params: {n_params}")
 
     model.train()
     sums, data_time, t0 = {}, 0.0, time.time()
     teacher_forcing = {**cfg, "loss": {**cfg["loss"], "rollout_steps": 1}}
+    epoch_steps = len(train_loader)
+    rollout_from = rollout_start(cfg["loss"], epoch_steps)
+    if cfg["loss"]["rollout_steps"] > 1:
+        print(f"k-step loss from step {rollout_from} (epoch {epoch_of(rollout_from, epoch_steps)}), {epoch_steps} steps per epoch")
 
     for step in range(start, cfg["iterations"] + 1):
-        step_cfg = cfg if step >= cfg["loss"].get("rollout_from", 0) else teacher_forcing
+        step_cfg = cfg if step >= rollout_from else teacher_forcing
 
         t = time.time()
         clip = next(train_iter).to(device, non_blocking=True)
@@ -127,33 +108,15 @@ def train(cfg):
         logging = step % cfg["log_every"] == 0
         if logging:  # the weight matrices before the step, for the update ratios
             before = {n: p.detach().clone() for n, p in model.named_parameters() if p.requires_grad and p.ndim == 2}
-        out = train_step(model, sigreg, clip, opt, sched, params, step_cfg, autocast)
+        out = train_step(model, sigreg, clip, opt, sched, step_cfg, autocast)
         for k, v in out.items():
             sums[k] = sums.get(k, 0) + v.detach()
 
         if logging:
             n = cfg["log_every"]
-            m = {k: v.item() / n for k, v in sums.items()}
-            elapsed = time.time() - t0
-            metrics = {
-                "loss/total": m["loss"],
-                "loss/tf": m["tf"],
-                "loss/kl": m["kl"],
-                "loss/sigreg": m["sigreg"],
-                "loss/kl_weighted": cfg["loss"]["beta"]
-                * m["kl"],  # weighted terms: their real share of the loss
-                "loss/sigreg_weighted": cfg["loss"]["sigreg"] * m["sigreg"],
-                **{f"loss/{k}": v for k, v in m.items() if k.startswith("rollout")},
-                "optim/lr": sched.get_last_lr()[0],
-                **{f"optim/{k}": v for k, v in m.items() if k.startswith("gnorm")},
-                "optim/clipped": m["clipped"],  # share of the steps whose gradient was clipped
-                **{f"optim/{k}": v for k, v in update_ratios(model, before).items()},
-                "system/epoch": step / len(train_loader),
-                "system/clips_per_s": n * cfg["batch_size"] / elapsed,
-                "system/step_s": elapsed / n,
-                "system/data_s": data_time / n,
-                "system/mem_gb": peak_memory_gb(device),
-            }
+            metrics = train_metrics(sums, n, cfg, model, before) | progress(
+                sched, n, time.time() - t0, cfg["batch_size"], data_time, device
+            ) | {"system/epoch": epoch_of(step, epoch_steps)}
             log(run_dir, step, metrics, wandb_run)
             sums, data_time, t0 = {}, 0.0, time.time()
 
@@ -170,27 +133,33 @@ def train(cfg):
                 log(run_dir, step, metrics, wandb_run)
                 if metrics[best_metric] < best:
                     best = metrics[best_metric]
-                    save_checkpoint(
-                        run_dir / "best.pt",
-                        model=trainable_state(model),
-                        step=step,
-                        **{best_metric: best},
-                    )
+                    save_checkpoint(run_dir / "best.pt", model=trainable_state(model), step=step, **{best_metric: best})
             if cfg.get("save_every") and step % cfg["save_every"] == 0:  # to probe the run over training afterwards
                 save_checkpoint(run_dir / f"step-{step}.pt", model=trainable_state(model), step=step)
-            save_checkpoint(
-                run_dir / "last.pt",
-                model=trainable_state(model),
-                opt=opt.state_dict(),
-                sched=sched.state_dict(),
-                step=step,
-                best=best,
-                rng=rng_state(),
-            )
+            save_last(run_dir, model, opt, sched, step, best)
             t0 += time.time() - t_eval
 
     if wandb_run is not None:
         wandb_run.finish()
+
+
+def train_metrics(sums, n, cfg, model, before):
+    """The outputs of train_step summed over the last n steps -> the logged training metrics: loss terms (and their
+    weighted share of the loss), gradient norms, share of clipped steps, update ratios (before: the weights before
+    the last step)"""
+    m = {k: v.item() / n for k, v in sums.items()}
+    return {
+        "loss/total": m["loss"],
+        "loss/tf": m["tf"],
+        "loss/kl": m["kl"],
+        "loss/sigreg": m["sigreg"],
+        "loss/kl_weighted": cfg["loss"]["beta"] * m["kl"],  # weighted terms: their real share of the loss
+        "loss/sigreg_weighted": cfg["loss"]["sigreg"] * m["sigreg"],
+        **{f"loss/{k}": v for k, v in m.items() if k.startswith("rollout")},
+        **{f"optim/{k}": v for k, v in m.items() if k.startswith("gnorm")},
+        "optim/clipped": m["clipped"],  # share of the steps whose gradient was clipped
+        **{f"optim/{k}": v for k, v in update_ratios(model, before).items()},
+    }
 
 
 @torch.no_grad()
@@ -297,20 +266,11 @@ def gradient_shares(model, sigreg, clip, cfg, autocast):
     return metrics
 
 
-def train_step(model, sigreg, clip, opt, sched, params, cfg, autocast):
-
+def train_step(model, sigreg, clip, opt, sched, cfg, autocast):
+    """One optimizer step on a batch of clips -> the loss terms and the gradient norms (optimizer_step)"""
     with autocast:
         out = losses(model, sigreg, model.encode(clip), cfg)
-    opt.zero_grad(set_to_none=True)
-    out["loss"].backward()
-    out |= grad_norms(model)
-    out["gnorm"] = torch.nn.utils.clip_grad_norm_(
-        params, cfg["optim"]["grad_clip"]
-    )  # norm before clipping
-    out["clipped"] = (out["gnorm"] > cfg["optim"]["grad_clip"]).float()
-    opt.step()
-    sched.step()
-    return out
+    return out | optimizer_step(out["loss"], model, opt, sched, cfg["optim"]["grad_clip"])
 
 
 def losses(model, sigreg, emb, cfg):

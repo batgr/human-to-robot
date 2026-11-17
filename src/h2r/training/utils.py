@@ -94,12 +94,17 @@ def build_optimizer(model, optim, iterations):
     for name, p in model.named_parameters():
         if not p.requires_grad:
             continue  # frozen encoder
-        if p.ndim < 2 or name.endswith(("pos_embedding", "query", "cls_token", "position_embeddings")):
+        if p.ndim < 2 or name.endswith(
+            ("pos_embedding", "query", "cls_token", "position_embeddings")
+        ):
             no_decay.append(p)
         else:
             decay.append(p)
     opt = torch.optim.AdamW(
-        [{"params": decay, "weight_decay": optim["weight_decay"]}, {"params": no_decay, "weight_decay": 0.0}],
+        [
+            {"params": decay, "weight_decay": optim["weight_decay"]},
+            {"params": no_decay, "weight_decay": 0.0},
+        ],
         lr=optim["lr"],
     )
     schedule = warmup_cosine(int(optim["warmup"] * iterations), iterations)
@@ -116,7 +121,9 @@ def save_figures(figs, run_dir, step, wandb_run=None, prefix="figures"):
     if wandb_run is not None:
         import wandb
 
-        wandb_run.log({f"{prefix}/{k}": wandb.Image(f) for k, f in figs.items()}, step=step)
+        wandb_run.log(
+            {f"{prefix}/{k}": wandb.Image(f) for k, f in figs.items()}, step=step
+        )
     for fig in figs.values():
         plt.close(fig)
 
@@ -198,3 +205,74 @@ def save_checkpoint(path, **state):
     tmp = path.with_suffix(".tmp")
     torch.save(state, tmp)
     os.replace(tmp, path)
+
+
+def setup(cfg):
+    """Seeded generators, the device and the autocast context of a run"""
+    seed_everything(cfg["seed"])
+    device = pick_device()
+    return device, make_autocast(cfg["precision"], device)
+
+
+def open_run(cfg, run_dir=None):
+    """A new run directory (config.yaml, git commit and diff), or run_dir when resuming, and its W&B run"""
+    run_dir = Path(run_dir) if run_dir else make_run_dir(cfg)
+    return run_dir, init_wandb(cfg, run_dir)
+
+
+def trainable_state(model):
+    """State dict without the frozen weights (a frozen encoder reloads from the Hub), buffers kept"""
+    frozen = {n for n, p in model.named_parameters() if not p.requires_grad}
+    return {k: v for k, v in model.state_dict().items() if k not in frozen}
+
+
+def epoch_of(step, epoch_steps):
+    """0, 1, 2...: the epoch of a step (steps start at 1, epoch e = steps e * epoch_steps + 1 to (e + 1) * epoch_steps)"""
+    return max(step - 1, 0) // epoch_steps
+
+
+def optimizer_step(loss, model, opt, sched, grad_clip=None):
+    """Backward, gradient norm of each top-level module, clipping of the whole gradient when grad_clip is set, optimizer
+    and schedule steps -> {gnorm_<module>, and with grad_clip: gnorm (before clipping), clipped (1 when clipped)}"""
+    opt.zero_grad(set_to_none=True)
+    loss.backward()
+    out = grad_norms(model)
+    if grad_clip is not None:
+        params = [p for p in model.parameters() if p.requires_grad]
+        out["gnorm"] = torch.nn.utils.clip_grad_norm_(params, grad_clip)
+        out["clipped"] = (out["gnorm"] > grad_clip).float()
+    opt.step()
+    sched.step()
+    return out
+
+
+def progress(sched, n, elapsed, batch_size, data_time=None, device=None):
+    """Learning rate and speed over the last n steps (elapsed, data_time: seconds)"""
+    return {
+        "optim/lr": sched.get_last_lr()[0],
+        "system/clips_per_s": n * batch_size / elapsed,
+        "system/step_s": elapsed / n,
+        "system/data_s": None if data_time is None else data_time / n,  # waiting for the loader
+        "system/mem_gb": None if device is None else peak_memory_gb(device),
+    }
+
+
+def save_last(run_dir, model, opt, sched, step, best):
+    """last.pt: everything resume needs to continue the run exactly"""
+    save_checkpoint(Path(run_dir) / "last.pt", model=trainable_state(model), opt=opt.state_dict(),
+                    sched=sched.state_dict(), step=step, best=best, rng=rng_state())
+
+
+def resume(run_dir, model, opt, sched, device):
+    """Restores model, optimizer, schedule and random generators from run_dir/last.pt and drops the metrics logged
+    after it (they will be logged again) -> the next step and the best value so far"""
+    ckpt = torch.load(Path(run_dir) / "last.pt", map_location=device, weights_only=False)
+    model.load_state_dict(ckpt["model"], strict=False)  # a frozen encoder is not in the checkpoint
+    opt.load_state_dict(ckpt["opt"])
+    sched.load_state_dict(ckpt["sched"])
+    set_rng_state(ckpt["rng"])
+    start = ckpt["step"] + 1
+    metrics = Path(run_dir) / "metrics.jsonl"
+    lines = metrics.read_text().splitlines(keepends=True)
+    metrics.write_text("".join(line for line in lines if json.loads(line)["step"] < start))
+    return start, ckpt["best"]
