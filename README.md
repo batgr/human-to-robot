@@ -4,7 +4,7 @@
 
 Can an action-conditioned world model trained on human videos, without action labels, drive a robot with a different embodiment? We train a ViT encoder from scratch, an inverse dynamics model (IDM) and a JEPA-style predictor on 20 h of Something-Something v2. Robot actions enter through a small controller that maps them to the model's latent actions, and a CEM planner uses the model on a Panda arm in Robosuite.
 
-So far: the model predicts human video well, and it follows robot paths when its latent actions are inferred from the frames. The robot's own actions drive it much less, and planning does not yet beat doing nothing. The [16 experiments](#experiments) below test where it breaks.
+So far: the model predicts human video well, and it follows robot paths when its latent actions are inferred from the frames. The robot's own actions drive it much less. The [16 experiments](#experiments) below test where it breaks.
 
 ![Closed-loop planning in robosuite: robot planned by the model (top) and goal image (bottom)](docs/figures/closed-loop-planning.png)
 
