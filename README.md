@@ -1,34 +1,67 @@
 # Human-to-Robot
 
-```bash
-uv sync
+**Learning latent actions and visual dynamics from unlabeled human videos, then planning with them on a robot.**
 
-# raw videos -> frame shards (configs/data/config.yaml)
-uv run h2r data extract --set raw_dir=data/raw/ processed_dir=data/processed/
+Can an action-conditioned world model trained on human videos, without action labels, drive a robot with a different embodiment? We train a ViT encoder from scratch, an inverse dynamics model (IDM) and a JEPA-style predictor on 20 h of Something-Something v2. Robot actions enter through a small controller that maps them to the model's latent actions, and a CEM planner uses the model on a Panda arm in Robosuite.
 
-# frame shards -> Hugging Face Hub
-uv run h2r data push --set processed_dir=data/processed/ hf_repo=<user>/<dataset>
+So far: the model predicts human video well, and it follows robot paths when its latent actions are inferred from the frames. The robot's own actions drive it much less, and planning does not yet beat doing nothing. The [16 experiments](#experiments) below test where it breaks.
 
-# DROID episodes for the controller (configs/data/droid.yaml), then extract / push with the same config
-uv run h2r data droid
-uv run h2r data extract --config configs/data/droid.yaml
-uv run h2r data push --config configs/data/droid.yaml
+![Closed-loop planning in robosuite: robot planned by the model (top) and goal image (bottom)](docs/figures/closed-loop-planning.png)
 
-# controller for a trained world model; ablations: --set 'model.inputs=[state]' or 'model.inputs=[action]'
-uv run h2r train controller --set world_model=outputs/<wm-run>
+*Closed-loop planning with the 20 h model: at each step the CEM plans the next action toward the next frame of a demonstration, the action is executed, and the model replans from the new image. This is the best episode (validation episode 20): reach at step 13, grasp at 25, lift at 26; the cube drops at step 30. It is the only lift out of 20 episodes in this setting.*
 
-# closed loop in robosuite (configs/planning/robosuite.yaml, environment configs/env/config.yaml, CEM
-# configs/planning/cem.yaml): policy random | scripted | recorded | zero | cem, CEM goal final | stages | dense
-# (frame t + k); stage rates, summary.json and one video per episode in outputs/planning/
-uv run h2r plan run --set policy.goal=dense policy.k=1 policy.horizon=1 policy.context=2
-uv run h2r plan run --set policy=configs/planning/<another cem>.yaml   # another CEM file
-uv run h2r plan run --set policy.type=recorded                          # a baseline
-# same, watched in the MuJoCo window (macOS needs mjpython)
-uv run mjpython -m h2r.cli plan run --set env.has_renderer=true episodes.count=1
-
-# tests
-uv run pytest
+```text
+frame ──> ViT-tiny encoder ──> state s_t
+                                 │
+         (s_t, s_t+1) ──> IDM ──> latent action z_t      robot action a_t ──> controller ──> z_t
+                                 │
+         past states + z_t ──> predictor ──> next state s_t+1
 ```
+
+### Results at a glance
+
+Current model (20 h, details in [Current model](#current-model)). Every number is set beside a reference. **Persistence** is the forecast that nothing changes (ŝ_t+1 = s_t); errors are given as a fraction of its error, so below 1 beats it.
+
+| Measure | Model | Reference |
+|---|---|---|
+| Next-state error, held-out SSv2 | 0.0135 | persistence (no change) 1 |
+| 7-step rollout error, held-out SSv2 | 0.013 | persistence 1 |
+| Motion invented on still clips (predicted / true change) | 1.09 | 1 = nothing invented |
+| Robot paths over 7 steps, simulation: cosine to the real path, z from the IDM / from the robot's actions | 0.94 / 0.69 | DROID: 0.83 / ≤ 0.09 ([exp. 14](#14-do-real-robot-actions-drive-the-model)) |
+| Hit rate Top-1 / Top-5 of the true actions among 64, goal 3 steps ahead | 10.4 % / 31.9 % | chance 1.6 % / 7.8 % |
+| Offline FDE: Δxyz L1 error of the CEM plan, goal 7 steps ahead | 0.122 | zero plan 0.087, another episode's move 0.130 |
+| Closed loop, 20 episodes: reach / grasp / lift, best of 7 planner settings | 7 / 3 / 1 | recorded actions 18 / 19 / 16, zero plan 0 / 0 / 0 |
+| Gripper closure readable from the state (linear probe R²) | 0.04 | frozen DINOv2-S: 0.84 |
+
+### Three findings in figures
+
+**More video keeps helping.** Prediction error falls about 20 % per doubling of SSv2 video, with no saturation up to 8 h; more classes at equal hours help more ([exp. 4](#4-does-more-video-help)).
+
+![Validation error versus hours of video](docs/figures/experiments/data-scaling.png)
+
+**A 2-step rollout loss looks better for the wrong reason.** Every prediction metric improves, but the latent action starts carrying the next frame (leak 1 % → 66 %). Starting the term later or applying it to the predictor only brings the leak down to about 3 % ([exp. 5](#5-does-a-2-step-rollout-loss-help), [exp. 11](#11-how-much-does-the-leak-metric-hide)).
+
+![Prediction gain and leak for each rollout loss variant](docs/figures/experiments/rollout-leak.png)
+
+**The encoder does not learn where the hand is.** A linear probe reads the hand position from frozen DINOv2 patches (R² 0.39–0.43) but hardly from our states (0.00–0.07, untrained 0.04) ([exp. 7](#7-do-the-states-know-where-the-hand-is)).
+
+![Hand position decodable from each set of features](docs/figures/experiments/hand-probe.png)
+
+### Open questions and next experiments
+
+One experiment at a time; the decision rule is fixed before each run.
+
+| Question | Hypothesis (untested) | Next experiment |
+|---|---|---|
+| Why does planning with robot actions not beat doing nothing? | The action → controller → z path does not pin the action, and the CEM spends its effort cancelling motion the model invents on still scenes. | Check whether the CEM direction opposes the drift; then plan directly over z (latent actions follow real paths: cosine 0.94) and decode z → action. |
+| Why is the hand, and the gripper, invisible to the encoder? | The objective: SIGReg drives most of the encoder gradient (exp. 8), so small fast parts are ignored. | Per-layer hand probe on the 200 h model; rebalance the prediction and SIGReg terms and follow the probe. |
+| Is the 2-step rollout loss worth its leak? | The gains rely on the leak, which planning cannot use. | K = 1 against K = 2 on the same data and seed; start the term by steps, epochs or learning rate. |
+| How small can the latent action be? | z already uses 5–8 active dimensions of 64; a tighter bottleneck may cut the leak and keep the motion. | z of 2 / 4 / 8 / 64 dimensions, a stronger KL, a discrete z. |
+| Do more and more varied human videos help? | Diversity beat quantity at 8 h (exp. 4). | Mixes of SSv2 (197 h), EPIC-KITCHENS-100 (100 h), Charades (81 h) and EgoDex (7.6 h) against SSv2 alone, at equal hours. |
+| Is the predictor the right size? | Its MLP (10.7 × the width, from LeWM) was never tuned. | Predictor sizes on a fixed encoder. |
+| Do human videos help a robot? (the goal) | | Human + robot video against robot only, on the same robot tasks. |
+
+Commands are at the end, in [Usage](#usage).
 
 ## Current model
 
@@ -70,26 +103,85 @@ Measured on validation at step 20,000:
 
 These numbers do not show that the model is usable for control: see experiments 14 to 16.
 
-### Planning metrics of the current model
+### Planning metrics
 
 Kept up to date: every new world model gets the same measures, on the same windows, so its progress on the task can be followed. Robosuite Lift, simulation validation episodes (210), controller `ctrl-sim`, context of 2 states, 3 actions planned. Intervals are 95 % bootstrap over episodes.
 
-| Metric | Value | Reference |
+Each table has one row per world model, so models can be compared directly. 20 h: `wm-cls-ssv2-20hall-k2from1050-b3e-4-20k`; 200 h: `wm-cls-ssv2-200hall-b256-k2from1050-b3e-4-20k`; both `step-20000.pt`, each with its own `ctrl-sim`. Offline numbers come from `h2r plan offline` (`outputs/planning-offline/`).
+
+**Success rate, closed loop** (20 episodes, counts; details in [Closed loop](#closed-loop-mpc-in-robosuite))
+
+| Planner | Model | Reach | Grasp | Lift |
+|---|---|---|---|---|
+| Recorded actions (reference) | | 18 | 19 | 16 |
+| Zero plan (reference) | | 0 | 0 | 0 |
+| Final goal, H = 1 | 20 h | 0 | 0 | 0 |
+| | 200 h | 0 | 1 | 0 |
+| Final goal, H = 2 | 20 h | 1 | 1 | 0 |
+| | 200 h | 1 | 0 | 0 |
+| Final goal, H = 3 | 20 h | 0 | 0 | 0 |
+| | 200 h | 0 | 0 | 0 |
+| Stage subgoals, H = 1 | 20 h | 3 | 1 | 0 |
+| | 200 h | 0 | 1 | 0 |
+| Stage subgoals, H = 2 | 20 h | 5 | 3 | 1 (pushed) |
+| | 200 h | 3 | 4 | 1 |
+| Dense subgoals t+1, H = 1 | 20 h | 4 | 3 | 1 |
+| | 200 h | 7 | 2 | 0 |
+| Dense subgoals t+7, H = 3 | 20 h | 7 | 3 | 0 |
+| | 200 h | 1 | 1 | 0 |
+
+**Hit rate**: rank of the true actions among 64 action sequences (the true ones and 63 from other episodes), Sim val.
+
+| Model | Top-1, goal 3 steps | Top-5, goal 3 steps | Top-1, goal 7 steps | Top-5, goal 7 steps |
+|---|---|---|---|---|
+| Chance | 1.6 % | 7.8 % | 1.6 % | 7.8 % |
+| 20 h | 10.4 % | 31.9 % | 4.5 % | 20.1 % |
+| 200 h | 11.8 % | 39.3 % | 5.3 % | 22.9 % |
+
+**FDE**: Δxyz L1 error of the CEM plan against the real move, goal 7 steps ahead, 3 actions planned, Sim val. Lower is better.
+
+| Model | CEM | Zero plan | Another episode's move | CEM − zero plan |
+|---|---|---|---|---|
+| 20 h | 0.122 | 0.087 | 0.130 | −0.035 [−0.039, −0.030] |
+| 200 h | 0.136 | 0.087 | 0.130 | −0.049 [−0.053, −0.044] |
+
+**Offline verdict**: same measure, run once on the test set. Rule: the CEM beats the zero plan overall and on the most moving third.
+
+| Model | Sim test: CEM | Sim test: zero plan | DROID test: CEM | DROID test: zero plan | Passes |
+|---|---|---|---|---|---|
+| 20 h | 0.126 | 0.092 | 0.403 | 0.087 | no |
+| 200 h | 0.141 | 0.092 | not run | | no |
+
+**Direction of the plan**: cosine between the planned and the real Δxyz (0 = random), Sim val.
+
+| Model | Real goal 7 steps ahead | Amplitude (planned / real) | Goal imagined from the true actions (known case) |
+|---|---|---|---|
+| 20 h | 0.16 | 1.33 | 0.44 |
+| 200 h | 0.20 | 1.49 | 0.38 |
+
+**Cost gates**: does the cost rank the true actions first? Share of windows, Sim val.
+
+| Model | True actions beat another episode's, goal 3 steps (rule ≥ 0.75) | True actions beat the zero plan, goal 7 steps (rule > 0.5) |
 |---|---|---|
-| Success rate: reach / grasp / lift (closed loop) | best lift 1 / 20, see the closed-loop table below | recorded actions 16 / 20 |
-| Offline verdict, run once: Δxyz L1 error of the CEM plan, Sim test (ctrl-sim) / DROID test (ctrl-droid) | 0.126 [0.121, 0.131] / 0.403 [0.391, 0.415]: fails (rule: beat the zero plan overall and on the most moving third) | zero plan 0.092 / 0.087, another episode 0.136 / 0.135 |
-| Hit rate Top-1 / Top-5 of the true actions among 64, goal 3 steps ahead | 10.4 % [8.9, 12.0] / 31.9 % [29.2, 34.6] | chance 1.6 % / 7.8 % |
-| Same, goal 7 steps ahead (true actions are no longer the best plan) | 4.5 % [3.2, 5.8] / 20.1 % [17.7, 22.6] | chance 1.6 % / 7.8 % |
-| Δxyz L1 error of the CEM plan (offline FDE), real goal 7 steps ahead | 0.122 [0.114, 0.129] | zero plan 0.087 [0.081, 0.093], another episode's move 0.130 [0.125, 0.135] |
-| Same Δxyz L1 error by policy: scripted / random episodes | 0.086 / 0.169 | zero plan 0.061 / 0.121; CEM minus zero plan on the most moving scripted third −0.001 [−0.013, +0.010] |
-| Direction of the CEM plan (cosine Δxyz), real goal 7 steps ahead | 0.16 [0.13, 0.20], amplitude 1.33 × the true move | random plan 0.00 |
-| True actions cost less than another episode's, goal 3 steps ahead | 0.745 [0.734, 0.757] | chance 0.5, pass rule 0.75 |
-| True actions bring the state closer than a zero plan, goal 7 steps ahead | 0.633 [0.605, 0.662] | chance 0.5 |
-| Direction of the planned move (cosine Δxyz), goal imagined from the true actions | 0.42 [0.28, 0.56] | random plan 0.00 |
-| Same goal imagined 7 steps ahead (no model error on the goal): Δxyz L1 error / cosine to the 3 / 7 true steps | 0.114 [0.107, 0.120] / 0.17 / 0.30 | real goal 0.122 / 0.16 / 0.30; zero plan 0.087; 3 true steps 0.62 to the 7-step move |
-| Same goal imagined 7 steps ahead, all 7 actions planned (diagnostic): cosine to the true 7-step move / final elite cost | 0.31 [0.27, 0.34] / 0.00047 | 3 actions planned 0.30; true actions cost 0 |
-| Δxyz L1 error of the CEM plan, 1 action, goal 1 step ahead | 0.044 [0.041, 0.046]; most moving third: gain on the zero plan +0.0045 [+0.0020, +0.0070] | zero plan 0.038 [0.035, 0.041], another episode 0.061 |
-| Gripper closure readable from the state (linear probe R²) | 0.04 | position x 0.81, z 0.58; time alone 0.05 |
+| Chance | 0.5 | 0.5 |
+| 20 h | 0.745 | 0.633 |
+| 200 h | 0.799 | 0.650 |
+
+**State probe**: linear probe (R²) from s_t − s_0 to the change of the gripper position and of its closure, Sim val.
+
+| Model | x | y | z | Gripper closure |
+|---|---|---|---|---|
+| Time alone (reference) | 0.03 | 0.00 | 0.26 | 0.05 |
+| 20 h | 0.81 | 0.44 | 0.58 | 0.04 |
+| 200 h | 0.81 | 0.36 | 0.63 | 0.05 |
+
+**Diagnostics, 20 h model only** (Sim val)
+
+| Setting | Δxyz error | Cosine to the true move | Reference |
+|---|---|---|---|
+| Goal imagined 7 steps ahead (no model error on the goal), 3 actions | 0.114 | 0.30 (7 steps) | real goal 0.122 / 0.30 |
+| Same, all 7 actions planned | | 0.31 | 3 actions 0.30 |
+| 1 action, goal 1 step ahead | 0.044 | | zero plan 0.038 |
 
 #### Closed loop (MPC in robosuite)
 
@@ -119,11 +211,27 @@ Goals:
 
 Counts out of 20, 95 % Wilson intervals. Steps to a stage: median over the episodes that reach it. Final error: distance at step 40 to the recording's final gripper position and final cube position. Offline columns: same horizon and goal distance on Sim val windows. Time per step: wall clock on a MacBook (MPS), rendering and simulation included (0.43 s without planning).
 
-- **Measured:** no planner lifts the cube in a stable way. The one lift with dense subgoals t+1 (episode 20) raises the cube 9 cm, grasped at step 23, and drops it 2 steps later. *The stage-subgoal lift (episode 134) is the cube at 4.1 cm for one step, without a grasp at that step: pushed, not lifted (inferred).
+- **Measured:** no planner lifts the cube in a stable way. The one lift with dense subgoals t+1 (episode 20) grasps the cube at step 25, holds it 5 steps and lifts it at steps 26–28, up to 7 cm above its resting height; the cube is back on the table at step 30. *The stage-subgoal lift (episode 134) is the cube at 4.1 cm for one step, without a grasp at that step: pushed, not lifted (inferred).
 - **Measured:** grasps last 1 or 2 steps (recorded actions: 22). The gripper is commanded closed / open 6 to 8 times per episode (recording: once).
 - **Measured:** with the final goal alone the arm moves about 8 cm in 5 steps, then stays 13–14 cm from the cube, for every H. With subgoals it comes to about 7 cm near step 15, then moves away when the goal becomes the lifted cube. Every planner ends 13–16 cm from the cube.
 - **Measured:** the recorded actions through the executor lift 16 / 20 (recording 20 / 20 on these episodes): without replanning, a drift of 1–2 cm at closing time flips marginal grasps (on 119 episodes: 10 lost, 9 gained).
 - **Inferred:** the subgoals help the approach (reach 3–7 / 20 against 0–1 with the final goal), not the grasp: the state does not hold the gripper closure (probe R² 0.04), so the CEM plans it at random.
+
+**200 h world model** (SSv2 200 h, `step-20000.pt`, its own ctrl-sim `best.pt` at step 22,500; same 20 episodes, executor and CEM; `outputs/planning-200h/`, 12 Nov.):
+
+| Planner | Reach | Grasp | Lift | Steps to reach / grasp / lift | Final error: gripper / cube | Time per step |
+|---|---|---|---|---|---|---|
+| Final goal, H = 1 | 0 [0–16 %] | 1 [1–24 %] | 0 [0–16 %] | – / 32 / – | 23.1 / 11.9 cm | 0.21 s |
+| Final goal, H = 2 | 1 [1–24 %] | 0 [0–16 %] | 0 [0–16 %] | 8 / – / – | 42.0 / 11.9 cm | 0.39 s |
+| Final goal, H = 3 | 0 [0–16 %] | 0 [0–16 %] | 0 [0–16 %] | – / – / – | 26.2 / 11.9 cm | 0.58 s |
+| Stage subgoals, H = 1 | 0 [0–16 %] | 1 [1–24 %] | 0 [0–16 %] | – / 12 / – | 23.9 / 12.1 cm | 0.21 s |
+| Stage subgoals, H = 2 | 3 [5–36 %] | 4 [8–42 %] | 1 [1–24 %] | 7 / 10 / 38 | 32.4 / 12.1 cm | 0.39 s |
+| Dense subgoals t+1, H = 1 | 7 [18–57 %] | 2 [3–30 %] | 0 [0–16 %] | 9 / 9.5 / – | 17.9 / 12.4 cm | 0.21 s |
+| Dense subgoals t+7, H = 3 | 1 [1–24 %] | 1 [1–24 %] | 0 [0–16 %] | 8 / 14 / – | 21.7 / 11.9 cm | 0.58 s |
+
+- **Measured:** the one lift (stage subgoals H = 2, episode 291) is held: grasped on 21 of the last 32 steps, cube about 4 cm above its rest height at step 38 while grasped. Other grasps last 1 to 4 steps; two of them (final goal H = 1, stage subgoals H = 1) come without reach, the fingers closing on an edge with the gripper centre 3.0–3.5 cm away.
+- **Measured:** the arm ends farther from the recorded final position than with the 20 h model in every setting (17.9–42.0 cm against 6.7–19.9 cm); the offline plans are also larger (amplitude 1.45 against 1.24 on Sim test).
+- **Measured:** offline verdict on Sim test fails as for the 20 h model: Δxyz L1 error 0.141 [0.138, 0.145] against 0.092 for the zero plan; the cost gate on other episodes passes (0.803 [0.795, 0.810]).
 
 ```bash
 uv run h2r train wm --set name=wm-cls-ssv2-20hall-k2from1050-b3e-4-20k data.processed_dir=<dir> \
@@ -359,3 +467,40 @@ Offline CEM over 3 actions toward a goal state, on 64 test clips. Δxyz is the L
 - **Measured:** 64 clips are too few, the zero plan changes from 0.132 to 0.094 on all clips. Planning must be compared on the same clips, not against a fixed value.
 - **Inferred:** the CEM pushes toward large actions that lower the imagined cost. This is not tested yet.
 - **Next:** the CEM is removed from this branch (last version in `248588a`) and will be rebuilt one step at a time, starting by testing whether the cost ranks the true actions first.
+
+## Usage
+
+```bash
+uv sync
+
+# raw videos -> frame shards (configs/data/config.yaml)
+uv run h2r data extract --set raw_dir=data/raw/ processed_dir=data/processed/
+
+# frame shards -> Hugging Face Hub
+uv run h2r data push --set processed_dir=data/processed/ hf_repo=<user>/<dataset>
+
+# one subset of a multi-dataset repo (batgre/h2r-human: ssv2, epic100, howto100m, ...): pushed into <repo>/<subset>/
+uv run h2r data push --set processed_dir=data/processed/ hf_repo=<user>/<dataset> subset=<name>
+# part of it into a local root that ClipDataset reads: chosen subsets (None = all), hours split equally among them
+uv run python -c "from h2r.data.dataset import fetch; fetch('<user>/<dataset>', 'data/mix-30h', subsets=None, hours=30)"
+
+# DROID episodes for the controller (configs/data/droid.yaml), then extract / push with the same config
+uv run h2r data droid
+uv run h2r data extract --config configs/data/droid.yaml
+uv run h2r data push --config configs/data/droid.yaml
+
+# controller for a trained world model; ablations: --set 'model.inputs=[state]' or 'model.inputs=[action]'
+uv run h2r train controller --set world_model=outputs/<wm-run>
+
+# closed loop in robosuite (configs/planning/robosuite.yaml, environment configs/env/config.yaml, CEM
+# configs/planning/cem.yaml): policy random | scripted | recorded | zero | cem, CEM goal final | stages | dense
+# (frame t + k); stage rates, summary.json and one video per episode in outputs/planning/
+uv run h2r plan run --set policy.goal=dense policy.k=1 policy.horizon=1 policy.context=2
+uv run h2r plan run --set policy=configs/planning/<another cem>.yaml   # another CEM file
+uv run h2r plan run --set policy.type=recorded                          # a baseline
+# same, watched in the MuJoCo window (macOS needs mjpython)
+uv run mjpython -m h2r.cli plan run --set env.has_renderer=true episodes.count=1
+
+# tests
+uv run pytest
+```
