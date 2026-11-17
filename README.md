@@ -57,7 +57,26 @@ One experiment at a time; the decision rule is fixed before each run.
 | Is the predictor the right size? | Its MLP (10.7 × the width, from LeWM) was never tuned. | Predictor sizes on a fixed encoder. |
 | Do human videos help a robot? (the goal) | | Human + robot video against robot only, on the same robot tasks. |
 
-Commands are at the end, in [Usage](#usage).
+## Quickstart
+
+```bash
+uv sync
+
+# frame shards from a folder of videos (configs/data/config.yaml); our SSv2 copy on the Hub is private (licence)
+uv run h2r data extract --set raw_dir=data/raw/ processed_dir=data/processed/
+
+# world model, current recipe: 20,000 steps, 2-step rollout loss from epoch 1, β 3e-4
+uv run h2r train wm --set name=<run> data.processed_dir=data/processed/ \
+    loss.rollout_steps=2 loss.rollout_from_epoch=1 loss.beta=0.0003 iterations=20000
+
+# controller (robot action -> z) on the simulated episodes, public: batgre/h2r-sim-v3
+uv run h2r train controller --set world_model=outputs/<run> data.root=data/h2r-sim/ data.hf_repo=batgre/h2r-sim-v3
+
+# closed-loop planning in robosuite Lift, dense subgoals t+1
+uv run h2r plan run --set policy.controller=outputs/<controller run> policy.goal=dense policy.k=1 policy.horizon=1
+```
+
+Every command, data preparation and options included: [Command reference](#command-reference).
 
 ## Current model
 
@@ -231,11 +250,6 @@ Steps to a stage: median over the episodes that reach it. Final error: distance 
 - **Measured:** the one lift (stage subgoals H = 2, episode 291) is held: grasped on 21 of the last 32 steps, cube about 4 cm above its rest height at step 38 while grasped. Other grasps last 1 to 4 steps; two of them (final goal H = 1, stage subgoals H = 1) come without reach, the fingers closing on an edge with the gripper centre 3.0–3.5 cm away.
 - **Measured:** the arm ends farther from the recorded final position than with the 20 h model in every setting (17.9–42.0 cm against 6.7–19.9 cm); the offline plans are also larger (amplitude 1.45 against 1.24 on Sim test).
 - **Measured:** offline verdict on Sim test fails as for the 20 h model: Δxyz L1 error 0.141 [0.138, 0.145] against 0.092 for the zero plan; the cost gate on other episodes passes (0.803 [0.795, 0.810]).
-
-```bash
-uv run h2r train wm --set name=wm-cls-ssv2-20hall-k2from1050-b3e-4-20k data.processed_dir=<dir> \
-    loss.rollout_steps=2 loss.rollout_from=1050 loss.beta=0.0003 iterations=20000
-```
 
 ## Experiments
 
@@ -477,7 +491,7 @@ Offline CEM over 3 actions toward a goal state, on 64 test clips. Δxyz is the L
 - **Inferred:** the CEM pushes toward large actions that lower the imagined cost. This is not tested yet.
 - **Next:** the CEM is removed from this branch (last version in `248588a`) and will be rebuilt one step at a time, starting by testing whether the cost ranks the true actions first.
 
-## Usage
+## Command reference
 
 ```bash
 uv sync
@@ -497,6 +511,10 @@ uv run python -c "from h2r.data.dataset import fetch; fetch('<user>/<dataset>', 
 uv run h2r data droid
 uv run h2r data extract --config configs/data/droid.yaml
 uv run h2r data push --config configs/data/droid.yaml
+
+# world model (configs/training/world_model.yaml): the current recipe, K = 2 from epoch 1
+uv run h2r train wm --set name=<run> data.processed_dir=data/processed/ \
+    loss.rollout_steps=2 loss.rollout_from_epoch=1 loss.beta=0.0003 iterations=20000
 
 # controller for a trained world model; ablations: --set 'model.inputs=[state]' or 'model.inputs=[action]'
 uv run h2r train controller --set world_model=outputs/<wm-run>
