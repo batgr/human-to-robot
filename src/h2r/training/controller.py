@@ -80,8 +80,8 @@ def transitions(data):
 
 
 def controller_loss(ctrl, s, a, mu):
-    """L2 to the IDM's latent action, summed over its dimensions (Garrido et al. 2026); s: (B, D) or (B, N, D)"""
-    return (ctrl(a, s.flatten(1).float()).float() - mu).pow(2).sum(-1).mean()
+    """L2 to the IDM's latent action, summed over its dimensions (Garrido et al. 2026); s: (B, D)"""
+    return (ctrl(a, s.float()).float() - mu).pow(2).sum(-1).mean()
 
 
 @torch.no_grad()

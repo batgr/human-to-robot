@@ -509,7 +509,7 @@ def task_windows(data, length, context, policies):
         length,
     )
     s, a, episode = w["s"].float(), w["a"].float(), w["e"][:, 0]
-    still = ((s[:, context - 1] - s[:, -1]) ** 2).flatten(1).mean(-1)
+    still = ((s[:, context - 1] - s[:, -1]) ** 2).mean(-1)
     order, n = still.argsort(), len(still)
     groups = {"all": torch.ones(n, dtype=torch.bool)}
     for name, part in zip(
@@ -667,7 +667,7 @@ def state_probe(train, data):
     """
 
     def features(d):
-        x = torch.cat([(s.float() - s[:1].float()).flatten(1) for s in d["s"]])
+        x = torch.cat([s.float() - s[:1].float() for s in d["s"]])
         y = torch.cat(
             [
                 torch.cat([torch.zeros(1, 4), a.float()[:, [0, 1, 2, 6]].cumsum(0)])

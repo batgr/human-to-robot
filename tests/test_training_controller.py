@@ -57,7 +57,7 @@ def tiny_runs(tmp_path):
 
     D, Z = 16, 8
     model_cfg = {
-        "num_patches": 1, "history_size": 2,
+        "history_size": 2,
         "encoder": {"type": "vit", "image_size": 28, "patch_size": 14, "dim": 16, "depth": 1, "heads": 2},
         "projector": {"hidden_dim": 32, "output_dim": D},
         "predictor": {"input_dim": D, "hidden_dim": D, "cond_dim": Z, "depth": 1, "heads": 2, "dim_head": 8, "mlp_dim": 32},

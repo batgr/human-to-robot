@@ -30,26 +30,6 @@ def test_rollout_terms_match_an_explicit_unrolling():
     assert rollout_terms(model, emb, z, steps=1, w=w) == []
 
 
-def test_stop_grad_target_cuts_only_the_target_path():
-    """loss.stop_grad_target: same loss value; no gradient of tf reaches a state used only as a target (the IDM's z
-    held fixed here), while the states read by the predictor still get one"""
-    from h2r.models.module import SIGReg
-    from h2r.training.world_model import losses
-
-    model, D = small_model()
-    z = torch.randn(2, 3, D)
-    model.idm.forward = lambda emb: (z, torch.zeros(()))  # z without a path to the states
-    cfg = {"loss": {"beta": 0.0, "sigreg": 0.0, "rollout_steps": 1, "rollout_window": 3}}
-    emb = torch.randn(2, 4, D, requires_grad=True)
-    grads = {}
-    for sg in (False, True):
-        out = losses(model, SIGReg(), emb, {"loss": cfg["loss"] | {"stop_grad_target": sg}})
-        grads[sg] = (out["tf"].item(), torch.autograd.grad(out["tf"], emb)[0])
-    assert grads[False][0] == grads[True][0]
-    assert grads[False][1][:, -1].abs().sum() > 0 and grads[True][1][:, -1].abs().sum() == 0  # last state: target only
-    assert grads[True][1][:, 0].abs().sum() > 0  # first state: read by the predictor
-
-
 def test_rollout_starts_at_the_first_step_of_its_epoch():
     from h2r.training.world_model import epoch_of, rollout_start
 
@@ -87,7 +67,7 @@ def tiny_wm_cfg(tmp_path):
     cfg = load("configs/training/world_model.yaml")
     D, Z = 16, 8
     cfg["model"] = {
-        "embed_dim": D, "latent_action_dim": Z, "num_patches": 1, "residual": False, "history_size": 2,
+        "embed_dim": D, "latent_action_dim": Z, "history_size": 2,
         "encoder": {"type": "vit", "image_size": 28, "patch_size": 14, "dim": 16, "depth": 1, "heads": 2},
         "projector": {"hidden_dim": 32, "output_dim": D},
         "predictor": {"input_dim": D, "hidden_dim": D, "cond_dim": Z, "depth": 1, "heads": 2, "dim_head": 8, "mlp_dim": 32},

@@ -16,7 +16,7 @@ class ControlledRollout:
         self.err = {"ctrl": [], "idm": []}
 
     def update(self, model, ctrl, emb, mu, actions):
-        """emb: (B, H + 1, D) or (B, H + 1, N, D) states of an episode window, mu: (B, H, z_dim) the IDM's latent actions
+        """emb: (B, H + 1, D) states of an episode window, mu: (B, H, z_dim) the IDM's latent actions
         of its transitions, actions: (B, H, act_dim) the real ones"""
         start, past, target = emb[:, :1], mu[:, :0], emb[:, 1:].float()
         preds = {
@@ -25,7 +25,7 @@ class ControlledRollout:
         }
         for k, pred in preds.items():
             self.err[k].append(
-                (pred.float() - target).pow(2).flatten(2).mean(-1).cpu()
+                (pred.float() - target).pow(2).mean(-1).cpu()
             )  # (B, H)
 
     def compute(self):

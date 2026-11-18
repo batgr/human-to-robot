@@ -278,18 +278,13 @@ def losses(model, sigreg, emb, cfg):
     sig_w = cfg["loss"]["sigreg"]
     z, kl = model.idm(emb)  # (B, T-1, z_dim), one latent action per transition
 
-    pred = model.predict(emb[:, :-1], z)  # (B, T-1, D) or (B, T-1, N, D)
+    pred = model.predict(emb[:, :-1], z)  # (B, T-1, D)
 
-    # stop-gradient on the target (AD-E2E-JEPA): the prediction loss moves the prediction toward the target, never the
-    # target toward the prediction; the IDM still reads both states, and SIGReg still sees every state
-    target = emb.detach() if cfg["loss"].get("stop_grad_target") else emb
     distance = F.l1_loss if cfg["loss"].get("prediction") == "l1" else F.mse_loss
-    tf = distance(pred.float(), target[:, 1:].float())  # every transition of the clip
-    rollout = rollout_terms(model, emb, z, cfg["loss"]["rollout_steps"], cfg["loss"]["rollout_window"], target, distance)
+    tf = distance(pred.float(), emb[:, 1:].float())  # every transition of the clip
+    rollout = rollout_terms(model, emb, z, cfg["loss"]["rollout_steps"], cfg["loss"]["rollout_window"], distance)
 
-    sig = sigreg(
-        rearrange(emb.float(), "b t ... d -> (t ...) b d")
-    )  # per frame (and token) across clips
+    sig = sigreg(rearrange(emb.float(), "b t d -> t b d"))  # per frame across clips
 
     loss = tf + sum(rollout) + (beta * kl) + (sig_w * sig)
 
@@ -298,13 +293,12 @@ def losses(model, sigreg, emb, cfg):
     }
 
 
-def rollout_terms(model, emb, z, steps, w, target=None, distance=F.mse_loss):
+def rollout_terms(model, emb, z, steps, w, distance=F.mse_loss):
     """The k-step loss of JEPA-WM (Terver et al. 2025): L_k = error on a state predicted after k predictor steps from
     real states, for k = 2..steps (L_1 is tf). Each step reads the previous predictions detached (last-gradient only)
     in a window of w states (W_t), as at planning time; every state of the clip is a target once per k, so every
     initial context length is used (the paper samples one at random).
-    emb: (B, T, D) or (B, T, N, D), z: (B, T-1, z_dim) the latent actions of the true transitions, target: the states
-    the terms compare to (emb detached for a stop-gradient on the target), emb when None, distance: mse or l1, as tf
+    emb: (B, T, D), z: (B, T-1, z_dim) the latent actions of the true transitions, distance: mse or l1, as tf
     """
     T = emb.size(1)
     assert w < T, f"rollout_window {w} needs clips of more than {w} frames"
@@ -334,9 +328,9 @@ def rollout_terms(model, emb, z, steps, w, target=None, distance=F.mse_loss):
         )
         pred = torch.stack(
             [out[i, :, r] for i, r in enumerate(read)], dim=1
-        )  # (B, T-k, ...)
+        )  # (B, T-k, D)
         if k > 1:
-            terms.append(distance(pred.float(), (emb if target is None else target)[:, k:].float()))
+            terms.append(distance(pred.float(), emb[:, k:].float()))
         depth.append(
             torch.cat([emb[:, :k], pred], dim=1).detach()
         )  # positions < k never read at depth k

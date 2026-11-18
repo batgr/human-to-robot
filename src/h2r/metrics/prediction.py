@@ -36,16 +36,16 @@ class PredictionQuality:
         self.raw = {k: [] for k in keys}
 
     def update(self, emb, pred, clip):
-        """emb: (B, T, D) or (B, T, N, D) states, pred: predictions of emb[:, 1:], clip: (B, T, 3, H, W) pixels"""
+        """emb: (B, T, D) states, pred: predictions of emb[:, 1:], clip: (B, T, 3, H, W) pixels"""
         b = len(emb)
         target = emb[:, 1:].float()
         self.err += (pred.float() - target).pow(2).mean() * b
         self.persistence += (emb[:, :-1].float() - target).pow(2).mean() * b
-        self.preds.update(pred.flatten(0, -2))
-        self.targets.update(target.flatten(0, -2))
+        self.preds.update(pred.flatten(0, 1))
+        self.targets.update(target.flatten(0, 1))
         self.n += b
 
-        e, p = emb.float().flatten(2), pred.float().flatten(2)  # one vector per frame, its tokens concatenated
+        e, p = emb.float(), pred.float()
         d_true, d_pred = e[:, 1:] - e[:, :-1], p - e[:, :-1]
         t = torch.arange(e.size(1) - 1, device=e.device).clamp_min(1)[None, :, None]
         drift = e[:, :-1] + (e[:, :-1] - e[:, :1]) / t  # persistence at t = 0
@@ -143,11 +143,11 @@ class RolloutError:
         self.n, self.err, self.persistence = 0, 0.0, 0.0
 
     def update(self, model, emb, z):
-        """emb: (B, T, D) or (B, T, N, D) states, z: (B, T-1, z_dim) latent actions of the true transitions"""
-        pred = model.rollout(emb[:, :1], z[:, :0], z[:, None])[:, 0]  # (B, T-1, ...)
+        """emb: (B, T, D) states, z: (B, T-1, z_dim) latent actions of the true transitions"""
+        pred = model.rollout(emb[:, :1], z[:, :0], z[:, None])[:, 0]  # (B, T-1, D)
         target = emb[:, 1:].float()
-        self.err += (pred.float() - target).pow(2).flatten(2).mean(-1).sum(0)
-        self.persistence += (emb[:, :1].float() - target).pow(2).flatten(2).mean(-1).sum(0)
+        self.err += (pred.float() - target).pow(2).mean(-1).sum(0)
+        self.persistence += (emb[:, :1].float() - target).pow(2).mean(-1).sum(0)
         self.n += len(emb)
 
     def compute(self):

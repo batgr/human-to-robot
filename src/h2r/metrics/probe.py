@@ -23,9 +23,7 @@ LAMBDAS = (1e-3, 1e-2, 1e-1, 1, 10, 100)
 
 
 def grid(x):
-    """(n, N, d) tokens of a square grid -> (n, 16 * d) pooled 4 x 4; (n, d) a single vector, kept"""
-    if x.dim() == 2:
-        return x
+    """(n, N, d) encoder patch tokens of a square grid -> (n, 16 * d) pooled 4 x 4"""
     n, N, d = x.shape
     side = int(N**0.5)
     return F.adaptive_avg_pool2d(x.reshape(n, side, side, d).permute(0, 3, 1, 2), min(side, 4)).flatten(1)
@@ -71,7 +69,7 @@ def frame_features(model, videos, need, device, autocast):
     for v, ts in need.items():
         px = decode(videos[v]["frames"])[ts].to(device)
         with autocast:
-            feats["state"].append(grid(model.encode(px[None])[0]).float().cpu())
+            feats["state"].append(model.encode(px[None])[0].float().cpu())
             tokens = model.encoder(px.float(), interpolate_pos_encoding=True).last_hidden_state
             feats["encoder"].append(grid(tokens[:, 1:]).float().cpu())
         keys += [(v, t) for t in ts]
@@ -232,7 +230,7 @@ class MotionProbe:
                 emb = model.encode(decode(r["frames"]).to(device)[None])
                 mu.append(model.idm.posterior(emb)[0][0].float().cpu())
                 mu_rev.append(model.idm.posterior(emb.flip(1))[0][0].flip(0).float().cpu())  # (t+1 -> t) at t
-            s.append(grid(emb[0]).float().cpu())
+            s.append(emb[0].float().cpu())
         model.train(was_training)
         n_tr = [len(m) for m in mu]
         vid = np.repeat(np.arange(len(self.videos)), n_tr)  # video of each transition
