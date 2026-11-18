@@ -24,6 +24,7 @@ Current model (20 h, details in [Current model](#current-model)). Every number i
 | Robot paths over 7 steps, simulation: cosine to the real path, z from the IDM / from the robot's actions | 0.94 / 0.69 | DROID: 0.83 / ≤ 0.09 ([exp. 14](#14-do-real-robot-actions-drive-the-model)) |
 | Hit rate Top-1 / Top-5 of the true actions among 64, goal 3 steps ahead | 10.4 % / 31.9 % | chance 1.6 % / 7.8 % |
 | Offline FDE: Δxyz L1 error of the CEM plan, goal 7 steps ahead | 0.122 | zero plan 0.087, another episode's move 0.130 |
+| Same, 1 action toward the next frame: gain on the zero plan, all clips / most moving third | −0.006 / +0.0045 | 0 = as good as not moving |
 | Closed loop, 20 episodes: reach / grasp / lift, best of 7 planner settings | 7 / 3 / 1 | recorded actions 18 / 19 / 16, zero plan 0 / 0 / 0 |
 | Gripper closure readable from the state (linear probe R²) | 0.04 | frozen DINOv2-S: 0.84 |
 
@@ -49,7 +50,7 @@ One experiment at a time; the decision rule is fixed before each run.
 
 | Question | Hypothesis (untested) | Next experiment |
 |---|---|---|
-| Why does planning with robot actions not beat doing nothing? | The action → controller → z path does not pin the action, and the CEM spends its effort cancelling motion the model invents on still scenes. | Check whether the CEM direction opposes the drift; then plan directly over z (latent actions follow real paths: cosine 0.94) and decode z → action. |
+| Why is the planned move less accurate than not moving, offline? | The action → controller → z path does not pin the action, and the CEM spends its effort cancelling motion the model invents on still scenes. Over a few steps the true move is small, so not moving is a strong reference. | Plan toward the current state, where the right answer is not to move, to measure the CEM's own bias; CEM toward goals 1, 2, 3 and 7 steps ahead; then plan directly over z (latent actions follow real paths: cosine 0.94) and decode z → action. |
 | Why is the hand, and the gripper, invisible to the encoder? | The objective: SIGReg drives most of the encoder gradient (exp. 8), so small fast parts are ignored. | Per-layer hand probe on the 200 h model; rebalance the prediction and SIGReg terms and follow the probe. |
 | Is the 2-step rollout loss worth its leak? | The gains rely on the leak, which planning cannot use. | K = 1 against K = 2 on the same data and seed; start the term by steps, epochs or learning rate. |
 | How small can the latent action be? | z already uses 5–8 active dimensions of 64; a tighter bottleneck may cut the leak and keep the motion. | z of 2 / 4 / 8 / 64 dimensions, a stronger KL, a discrete z. |
@@ -198,7 +199,13 @@ Counts out of 20. 95 % Wilson intervals: 0 → 0–16 %, 1 → 1–24 %, 2 → 3
 |---|---|---|---|
 | Goal imagined 7 steps ahead (no model error on the goal), 3 actions | 0.114 | 0.30 (7 steps) | real goal 0.122 / 0.30 |
 | Same, all 7 actions planned | | 0.31 | 3 actions 0.30 |
-| 1 action, goal 1 step ahead | 0.044 | | zero plan 0.038 |
+| 1 action, goal 1 step ahead | 0.044 | 0.31 | zero plan 0.038 |
+
+- **Measured:** the gap to the zero plan shrinks as the goal gets closer: CEM / zero plan 1.40 at 7 steps (0.122 / 0.087), 1.16 at 1 step (0.044 / 0.038). At 1 step the CEM beats the zero plan on the most moving third (+0.0045 [+0.0020, +0.0070]). Goals 2 and 3 steps ahead were not planned.
+- By definition, the zero plan's error is the size of the true move, small from one frame to the next, so not moving is a strong reference over a few steps.
+- **Measured:** the zero action is not still in the model (invented drift).
+- **Inferred:** on calm windows the CEM moves to cancel this drift, hence its loss on Δxyz.
+- **Untested:** whether the CEM's move opposes the drift. Planning toward the current state, where the right answer is not to move, would measure it.
 
 #### Closed loop (MPC in robosuite)
 
@@ -295,6 +302,7 @@ Data, split by whole video or episode:
 
 - **Measured:** spread across seeds follows how much z is used. The IDM switches on at a seed-dependent step (200–400).
 - **Inferred:** single-seed gaps under about 0.1 are noise.
+- **Code:** the residual predictor is removed from this branch; the direct one stays (last version with it in `59ae203`).
 - **An invalid experiment, caught:** a first CLS-vs-patch comparison reported 0.48 vs 0.77. Both runs were in fact CLS, because the Colab code ignored a config key. The 0.3 gap came from initialisation alone. Since then, runs assert the state shape.
 
 ### 3. KL weight and SIGReg weight
@@ -403,6 +411,7 @@ To find the cause, we measured the checkpoints at steps 1,500, 2,000 and 4,000 o
 - **Measured:** the states stay close to pixels. A 2-pixel shift moves them by 40–57 % of a real time step, against 20–25 % for the trained baselines and 69 % for an untrained encoder.
 - **Inferred:** the target path is what makes an encoder trained from scratch predictable. AD-E2E-JEPA can use a stop-gradient because its encoder is a frozen DINOv3.
 - **Untested:** a stop-gradient with a frozen encoder, an EMA target, or a partial target gradient.
+- **Code:** the stop-gradient and the patch-token states are removed from this branch; the model keeps one CLS state per frame (last version with both in `59ae203`).
 
 ### 11. How much does the leak metric hide?
 
