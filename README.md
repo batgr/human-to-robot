@@ -25,7 +25,7 @@ Current model (20 h, details in [Current model](#current-model)). Every number i
 | Hit rate Top-1 / Top-5 of the true actions among 64, goal 3 steps ahead | 10.4 % / 31.9 % | chance 1.6 % / 7.8 % |
 | Offline FDE: Δxyz L1 error of the CEM plan, goal 7 steps ahead | 0.122 | zero plan 0.087, another episode's move 0.130 |
 | Same, 1 action toward the next frame: gain on the zero plan, all clips / most moving third | −0.006 / +0.0045 | 0 = as good as not moving |
-| Closed loop, 20 episodes: reach / grasp / lift, best of 7 planner settings | 7 / 3 / 1 | recorded actions 18 / 19 / 16, zero plan 0 / 0 / 0 |
+| Closed loop, 20 episodes: reach / grasp / lift, best of 7 planner settings for each stage taken separately (no single setting reaches 7 / 3 / 1) | 7 / 3 / 1 | recorded actions 18 / 19 / 16, zero plan 0 / 0 / 0 |
 | Gripper closure readable from the state (linear probe R²) | 0.04 | frozen DINOv2-S: 0.84 |
 
 ### Three findings in figures
