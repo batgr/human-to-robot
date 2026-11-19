@@ -61,7 +61,8 @@ All numbers are for the model above, each beside a reference. **Persistence** is
 
 | Measure | Model | Reference |
 |---|---|---|
-| Robot paths over 7 steps, cosine to the real path, z from the IDM / from the robot's actions (test, most moving third) | simulation 0.93 / 0.70 | DROID 0.83 / 0.02 |
+| Robot paths over 7 steps, simulation: cosine to the real path, z from the robot's actions through the controller (test, most moving third) | 0.70 | z from the frames (IDM) 0.93; 0 = unrelated |
+| Same on real robot video (DROID) | 0.02 | z from the frames (IDM) 0.83; 0 = unrelated |
 | Gripper closure read from the state (linear probe R²) | 0.04 | frozen DINOv2-S: 0.84 |
 | Hit rate: the true actions ranked first / in the top 5 by the model's cost, among 64 sequences, goal 3 steps ahead | 10.4 % / 31.9 % | chance 1.6 % / 7.8 % |
 | Offline FDE: L1 error of the planned Δxyz, 3 actions toward a goal 7 steps ahead | 0.122 | zero plan 0.087, another episode's move 0.130 |
